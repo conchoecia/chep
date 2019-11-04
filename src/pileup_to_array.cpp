@@ -47,21 +47,15 @@ Vars process_cl_args(int argc, char **argv){
 
 int main(int argc, char **argv) {
   Vars vars = process_cl_args(argc, argv);
-  printf("min = %d\n", vars.min);
-  printf("max = %d\n", vars.max);
 
   //make data structure to store counts
-  std::map<uint,std::map<uint,uint>> table;
-  for (uint i = vars.min ; i <= vars.max ; i++){
+  std::map<int,std::map<int,int>> table;
+  for (int i = vars.min ; i <= vars.max ; i++){
     table[i]= {};
-    for (uint j = 0 ; j <= i ; j++){
-      table[i][j] = 0;
-    }
+    //for (int j = 0 ; j <= i ; j++){
+    //  table[i][j] = 0;
+    //}
   }
-
-  //for (std::string line; std::getline(std::cin, line);) {
-  //  std::cout << line << std::endl;
-  //}
 
   //parse the mpileup input
   std::string line;
@@ -71,7 +65,16 @@ int main(int argc, char **argv) {
     std::string token;
     while(std::getline(iss, token, '\t'))   // but we can specify a different one
       tokens.push_back(token);
-    std::cout << tokens[3] << "\t" << tokens[4] << "\n";
+    int depth = std::stoi(tokens[3]);
+    if (depth >= vars.min && depth <= vars.max){
+      int count = 0;
+      for (char const &c: tokens[4]) {
+        if (c == ',' || c == '.'){
+          count += 1;
+        }
+      }
+      table[depth][count] += 1;
+    }
   }
 
   //print out the entire table
