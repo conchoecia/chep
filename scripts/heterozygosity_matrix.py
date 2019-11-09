@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 This script makes several plots that are used to in calculating the heterozygosity of an animal.
 
