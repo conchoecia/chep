@@ -71,6 +71,7 @@ def plot_simple_figure(fname, xmin, xmax, scale, dark=False):
     panel1.set_ylim([0, xmax*1.1])
     panel1.set_xlabel("read depth")
     panel1.set_ylabel("\# of reference bases")
+    panel1.tick_params(axis='both', which='both', labelsize=6)
 
     # now make the color label
     #xpos, ypos, width, height
@@ -86,7 +87,8 @@ def plot_simple_figure(fname, xmin, xmax, scale, dark=False):
             which='both',      # both major and minor ticks are affected
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
-            labelbottom=False)
+            labelbottom=False,
+            labelsize=6)
     height = 1
     #print("height is :", height)
     #print("maxcol is :", maxcol)
@@ -131,6 +133,8 @@ def figure_with_marginal_histogram(fname, xmin, xmax, scale, dark = False):
     panel1.set_ylim([0, xmax*1.1])
     panel1.set_xlabel("read depth")
     panel1.set_ylabel("\# of reference bases")
+    panel1.tick_params(axis='both', which='both', labelsize=6)
+
 
     df.rename(columns={0: "depth", 1: "ref", 2: "count"}, inplace=True)
     df2 = df.groupby("depth")["count"].sum()
@@ -142,7 +146,8 @@ def figure_with_marginal_histogram(fname, xmin, xmax, scale, dark = False):
             which='both',      # both major and minor ticks are affected
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
-            labelbottom=False)
+            labelbottom=False,
+            inplace=True)
     thismfc = 'black'
     if dark:
         thismfc='white'
@@ -183,6 +188,7 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
     panel1.set_ylim([0, xmax*1.1])
     panel1.set_xlabel("read depth")
     panel1.set_ylabel("\# of reference bases")
+    panel1.tick_params(axis='both', which='both', labelsize=6)
 
     # now plot the depth coverage histogram
     df.rename(columns={0: "depth", 1: "ref", 2: "count"}, inplace=True)
@@ -194,7 +200,8 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
             which='both',      # both major and minor ticks are affected
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
-            labelbottom=False)
+            labelbottom=False,
+            labelsize=6)
     thismfc='black'
     if dark:
         thismfc='white'
@@ -237,7 +244,9 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
             which='both',      # both major and minor ticks are affected
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
-            labelbottom=False)
+            labelbottom=False,
+            labelsize=6)
+
     #unwrap the heterozygosity info into some plottable info
     xs=[key for key in sorted(het_dict)]
     ys=[het_dict[key]["het"] for key in sorted(het_dict)]
@@ -271,9 +280,7 @@ def determine_color_scheme(fname, xmin, xmax, dark=False):
     df3 = df2.loc[df2["ref"] < df2["depth"]*0.55]
     df4 = df3.loc[df3["ref"] >= df3["depth"]*0.45]
     scalemax = int(max(df4["count"]))
-    print("biggest value is ", scalemax)
     scale = np.linspace(0,1,scalemax+1)
-    print(len(scale))
     return scale
 
 def main(args):
