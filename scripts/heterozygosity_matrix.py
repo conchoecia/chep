@@ -147,7 +147,7 @@ def figure_with_marginal_histogram(fname, xmin, xmax, scale, dark = False):
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
             labelbottom=False,
-            inplace=True)
+            labelsize=True)
     thismfc = 'black'
     if dark:
         thismfc='white'
