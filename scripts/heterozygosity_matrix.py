@@ -46,22 +46,23 @@ def argparser():
     args = vars(args)
     return args
 
-def plot_simple_figure(fname, xmin, xmax, dark=False):
+def plot_simple_figure(fname, xmin, xmax, scale, dark=False):
+    maxval = len(scale)-1
     if args["dark"]:
         plt.style.use('dark_background')
+
     df = pd.read_csv(args["filename"], header=None, delim_whitespace=True)
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8,0.8])
 
     #this actually produces the plot
-    maxcol = max(df[2])/500
     for i in range(0,len(df)):
         x=df[0][i]
         y=df[1][i]
         if x >= xmin and x <= xmax:
-            thisfc = [1- ( min( (df[2][i]/maxcol), 1) )] * 3
+            thisfc = [1 - scale[min(df[2][i], maxval)]] *3
             if dark:
-                thisfc = [min( (df[2][i]/maxcol), 1)] * 3
+                thisfc = [scale[min(df[2][i], maxval)]] *3
             rectangle1=mplpatches.Rectangle((x,y),1,1,
                         linewidth=0,\
                         facecolor=thisfc)
@@ -74,7 +75,7 @@ def plot_simple_figure(fname, xmin, xmax, dark=False):
     # now make the color label
     #xpos, ypos, width, height
     panel2=plt.axes([0.16,0.58,0.05,0.3])
-    panel2.set_ylim(1,max(df[2])/500)
+    panel2.set_ylim(1,maxval)
     #panel2.set_yscale('log', basey=2)
     panel2.set_xlim(0,1)
     panel2.set_xticklabels([])
@@ -86,13 +87,13 @@ def plot_simple_figure(fname, xmin, xmax, dark=False):
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
             labelbottom=False)
-    height = np.linspace(0, max(df[2])/500, 200)[1]
+    height = 1
     #print("height is :", height)
     #print("maxcol is :", maxcol)
-    for i in np.linspace(0, max(df[2])/500, 200):
-        thisfc = [1- ( min( (i/maxcol), 1) )] * 3
+    for i in range(len(scale)):
+        thisfc = [1 - scale[i] ] * 3
         if dark:
-            thisfc = [min( (i/maxcol), 1)] * 3
+            thisfc = [scale[i]] * 3
         rectangle1=mplpatches.Rectangle((0,i),1,height,
                     linewidth=0,\
                     facecolor=thisfc)
@@ -105,20 +106,23 @@ def plot_simple_figure(fname, xmin, xmax, dark=False):
         plt.savefig("simple_het_plot.pdf")
         plt.savefig("simple_het_plot.png", dpi=300)
 
-def figure_with_marginal_histogram(fname, xmin, xmax, dark = False):
+def figure_with_marginal_histogram(fname, xmin, xmax, scale, dark = False):
+    maxval = len(scale)-1
+    if args["dark"]:
+        plt.style.use('dark_background')
+
     df = pd.read_csv(args["filename"], header=None, delim_whitespace=True)
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8,0.53])
     panel2=plt.axes([0.14,0.7,0.8,0.2])
 
-    maxcol = max(df[2])/500
     for i in range(0,len(df)):
         x=df[0][i]
         y=df[1][i]
         if x >= xmin and x <= xmax:
-            thisfc = [1- ( min( (df[2][i]/maxcol), 1) )] * 3
+            thisfc = [1 - scale[min(df[2][i], maxval)]] * 3
             if dark:
-                thisfc = [min( (df[2][i]/maxcol), 1)] * 3
+                thisfc = [scale[min(df[2][i], maxval)]] * 3
             rectangle1=mplpatches.Rectangle((x,y),1,1,
                         linewidth=0,\
                         facecolor=thisfc)
@@ -152,7 +156,11 @@ def figure_with_marginal_histogram(fname, xmin, xmax, dark = False):
         plt.savefig("marginal_het_plot.pdf")
         plt.savefig("marginal_het_plot.png", dpi=300)
 
-def fig_mhist_hetero(fname, xmin, xmax, dark=False):
+def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
+    maxval = len(scale)-1
+    if args["dark"]:
+        plt.style.use('dark_background')
+
     df = pd.read_csv(args["filename"], header=None, delim_whitespace=True)
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8, 0.38])
@@ -160,14 +168,13 @@ def fig_mhist_hetero(fname, xmin, xmax, dark=False):
     panel3=plt.axes([0.14,0.53,0.8, 0.18])
 
     #This plots the histogram below
-    maxcol = max(df[2])/500
     for i in range(0,len(df)):
         x=df[0][i]
         y=df[1][i]
         if x >= xmin and x <= xmax:
-            thisfc = [1- ( min( (df[2][i]/maxcol), 1) )] * 3
+            thisfc = [1 - scale[min(df[2][i], maxval)]] *3
             if dark:
-                thisfc = [min( (df[2][i]/maxcol), 1)] * 3
+                thisfc = [scale[min(df[2][i], maxval)]] *3
             rectangle1=mplpatches.Rectangle((x,y),1,1,
                         linewidth=0,\
                         facecolor=thisfc)
@@ -198,15 +205,15 @@ def fig_mhist_hetero(fname, xmin, xmax, dark=False):
     #make the line dividing the 1x from het sites
     xs = [x for x in range(xmin, int(xmax*1.1))]
     ys = [x*0.75 for x in xs]
-    panel1.plot(xs, ys, '-r', lw = 0.75)
+    panel1.plot(xs, ys, color="red", ls="--", alpha=0.4, lw = 0.5)
 
     #make a plot of het sites
     ys = [x*0.5 for x in xs]
-    panel1.plot(xs, ys, ':r', lw = 0.5)
+    panel1.plot(xs, ys, color="red", ls=":", alpha=0.4, lw = 0.5)
 
     #make a plot of lower cutoff
     ys = [x*0.25 for x in xs]
-    panel1.plot(xs, ys, '--r', lw = 0.5)
+    panel1.plot(xs, ys, color="red", ls="--", alpha=0.4, lw = 0.5)
 
     het_dict = {}
     # now we calculate heterozygosity
@@ -248,11 +255,35 @@ def fig_mhist_hetero(fname, xmin, xmax, dark=False):
         plt.savefig("marginal_het_het_plot.pdf")
         plt.savefig("marginal_het_het_plot.png", dpi=300)
 
+def determine_color_scheme(fname, xmin, xmax, dark=False):
+    """
+    This looks in the middle 50% of the plotting window,
+     finds the highest count in a cell at 0.5x coverage,
+     and sets that value to maxcolor. Everything from 0 to
+     that value is scaled, and everything above that value
+     is maxcolor.
+    """
+    dist = xmax-xmin
+    dd=0.25*dist
+    df = pd.read_csv(args["filename"], header=None, delim_whitespace=True,
+                     names=["depth","ref","count"])
+    df2 = df.query("depth <= {} and depth >= {}".format(xmax-dd, xmin+dd))
+    df3 = df2.loc[df2["ref"] < df2["depth"]*0.55]
+    df4 = df3.loc[df3["ref"] >= df3["depth"]*0.45]
+    scalemax = int(max(df4["count"]))
+    print("biggest value is ", scalemax)
+    scale = np.linspace(0,1,scalemax+1)
+    print(len(scale))
+    return scale
 
 def main(args):
-    plot_simple_figure(args["filename"], args["minX"], args["maxX"], args["dark"])
-    figure_with_marginal_histogram(args["filename"], args["minX"], args["maxX"],args["dark"])
-    fig_mhist_hetero(args["filename"], args["minX"], args["maxX"],args["dark"])
+    scale = determine_color_scheme(args["filename"], args["minX"], args["maxX"], args["dark"])
+    plot_simple_figure(args["filename"], args["minX"],
+                       args["maxX"], scale, args["dark"])
+    figure_with_marginal_histogram(args["filename"], args["minX"],
+                                   args["maxX"], scale, args["dark"])
+    fig_mhist_hetero(args["filename"], args["minX"],
+                     args["maxX"], scale, args["dark"])
 
 if __name__ == "__main__":
     args = argparser()
