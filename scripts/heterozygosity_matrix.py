@@ -83,7 +83,7 @@ def plot_simple_figure(fname, xmin, xmax, scale, dark=False):
     panel2.yaxis.set_label_position("right")
     panel2.yaxis.tick_right()
     plt.tick_params(
-            axis='x',          # changes apply to the x-axis
+            axis='both',          # changes apply to the x-axis
             which='both',      # both major and minor ticks are affected
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
@@ -142,7 +142,7 @@ def figure_with_marginal_histogram(fname, xmin, xmax, scale, dark = False):
     panel2.set_xlim([xmin, xmax])
     #panel2.set_ylim(0, max(df2["depth"]))
     panel2.tick_params(
-            axis='x',          # changes apply to the x-axis
+            axis='both',          # changes apply to the x-axis
             which='both',      # both major and minor ticks are affected
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
@@ -196,7 +196,7 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
     panel2.set_xlim([xmin, xmax])
     panel2.set_ylabel("\# of bases")
     panel2.tick_params(
-            axis='x',          # changes apply to the x-axis
+            axis='both',          # changes apply to the x-axis
             which='both',      # both major and minor ticks are affected
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
@@ -240,7 +240,7 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
     panel3.set_xlim([xmin, xmax])
     panel3.set_ylabel("\% Het")
     panel3.tick_params(
-            axis='x',          # changes apply to the x-axis
+            axis='both',          # changes apply to the x-axis
             which='both',      # both major and minor ticks are affected
             bottom=False,      # ticks along the bottom edge are off
             top=False,         # ticks along the top edge are off
