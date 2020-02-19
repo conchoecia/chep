@@ -226,17 +226,18 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
     # now we calculate heterozygosity
     df2.to_csv("df2.tsv", sep = '\t', index=True)
     for i in range(xmin, xmax +1):
-        onex = int(df.query("depth == {} and ref >= {}".format(i, i*0.75))["count"].sum())
-        half = int(df.query("depth == {} and ref < {} and ref >= {}".format(
-                        i, i*0.75, i*0.25))["count"].sum())
-        err  = int(df.query("depth == {} and ref < {}".format(
-                        i, i*0.25))["count"].sum())
-        het_dict[i] = {"depth": i,
-                       "one": onex,
-                       "half": half,
-                       "err": err,
-                       "totdepth": df2.loc[i],
-                       "het": (half/(onex+half))*100}
+        if i in df2.index:
+            onex = int(df.query("depth == {} and ref >= {}".format(i, i*0.75))["count"].sum())
+            half = int(df.query("depth == {} and ref < {} and ref >= {}".format(
+                            i, i*0.75, i*0.25))["count"].sum())
+            err  = int(df.query("depth == {} and ref < {}".format(
+                            i, i*0.25))["count"].sum())
+            het_dict[i] = {"depth": i,
+                           "one": onex,
+                           "half": half,
+                           "err": err,
+                           "totdepth": df2.loc[i],
+                           "het": (half/(onex+half))*100}
     panel3.set_xlim([xmin, xmax])
     panel3.set_ylabel("\% Het")
     panel3.tick_params(
