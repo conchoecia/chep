@@ -1,6 +1,6 @@
 CPPF=-O3 -std=c++11
 
-all: bin bin/chep_pileup_to_array  bin/chep_plot
+all: bin bin/chep_pileup_to_array  bin/chep_plot bin/chep_gff2intron
 development: bin/chep_windowed_het
 
 bin:
@@ -17,6 +17,12 @@ bin/chep_plot: scripts/heterozygosity_matrix.py
 	cd bin; \
 	ln -s ../scripts/heterozygosity_matrix.py chep_plot;\
 	cd ..
-     
+
+bin/chep_gff2intron: scripts/gff_to_intron_bed.py
+	chmod ugo+x scripts/gff_to_intron_bed.py; \
+	cd bin; \
+	ln -s ../scripts/gff_to_intron_bed.py chep_gff2intron;\
+	cd ..
+    
 #clean:
 #   rm hello.o hello.exe
