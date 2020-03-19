@@ -21,7 +21,7 @@ bin/chep_plot: scripts/heterozygosity_matrix.py
 bin/chep_gff2all: scripts/gff_to_intron_bed.py
 	chmod ugo+x scripts/gff_to_intron_bed.py; \
 	cd bin; \
-	ln -s ../scripts/gff_to_intron_bed.py chep_gff2intron;\
+	ln -s ../scripts/gff_to_intron_bed.py chep_gff2all;\
 	cd ..
     
 #clean:
