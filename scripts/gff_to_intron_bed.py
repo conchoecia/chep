@@ -1,10 +1,28 @@
 #!/usr/bin/env python
 
 """
-this program looks at every gene model in a transcriptome
- and outputs a bed file of the union of all the introns for each gene
+This program looks at every gene model in a transcriptome
+ and outputs a bed file of the different genomic regions.
+ It also outputs a list of genes that are contained within
+ introns.
 
-Example
+Usage:
+  chep_gff2regions outprefix ref gff
+
+Regions:
+  - Whole genome .bed file
+  - Genic Regions
+    - Includes introns and exons
+  - Exonic regions
+    - All exons, overlaps merged
+  - Intronic regions
+    - All intronic regions merged, No overlap whatsoever with exons.
+  - Intergenic regions
+    - All regions that do not contain genic regions
+  - Noncoding
+    - Introns and intergenic
+
+Explanation of intronic regions
 
 X = exon
 - = intron
@@ -16,15 +34,52 @@ X = exon
    bed             &&&&&&           &&&&&&&&&&&&
                    interval1         interval2
 
+Parameters:
+  chep_gff2intron out_prefix annotation.gff
+
+Required Software:
+  - samtools
+  - bedtools
+  - awk
+
 The output is:
-  - a transcripts.bed file. This is just a bed file of the transcript coords.
-  - an intronic.bed file. This is the coordinates of the intronic regions.
+  - out_prefix_transcripts.bed file.
+  - out_prefix_sense_spliced_in_intron_pairs.txt
+    - A list of transcripts for which 98% of the transcript sits within a single 
+      intron. In this file the transcript must have the same sense as the
+      enclosing intron. The file with two fields. Field 1 is the transcript.
+      Field 2 is the intron in which it sits.
+  - outprefix_antisense_spliced_in_intron_pairs.txt
+    - Same as above, but the transcript in the intron must be antisense to the
+      enclosing transcript.
 """
 
 import os
 import sys
-import pandas as pd
 import numpy as np
+import pandas as pd
+import subprocess
+
+def runner(run_this):
+    """Just runs a process on the system"""
+    process = subprocess.Popen(run_this,
+                     stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE,
+                     shell = True)
+    stdout, stderr = process.communicate()
+    for print_this in [stdout, stderr]:
+        print_this = print_this.decode('utf-8').strip()
+        if print_this:
+            print(print_this)
+
+def runner_w_output(run_this):
+    """Runs a process on the system and prints the output"""
+    process = subprocess.Popen(run_this,
+                     stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE,
+                     shell = True)
+    stdout, stderr = process.communicate()
+    return stdout.decode('utf-8').strip()
 
 def parse_intervals(TG_list):
     intervals = []
@@ -155,6 +210,8 @@ def df_to_995p(df):
     99.7          36173
     99.8          50502
     99.9          68541
+
+    functions to remove false positives, or genes that are obviously too long.
     """
     df["length"] = df["chromEnd"] - df["chromStart"] + 1
     filter_cutoff = int(np.percentile(df["length"], 99.5))
@@ -216,7 +273,7 @@ def gff_to_spliced_transcripts_df(gff_file):
                                'name', 'score', 'strand'])
     return df
 
-def transcript_95per_start_stop(df):
+def transcript_98per_start_stop(df):
     """
     prints out the intronic regions for each gene in bed format
     """
@@ -224,7 +281,7 @@ def transcript_95per_start_stop(df):
     df["chromStart_new"] = 1
     df["chromEnd_new"] = 1
     for index, row in df.iterrows():
-        twopfive = int(row["length"] *0.05)
+        twopfive = int(row["length"] *0.02)
         df.loc[index, "chromStart_new"] = row["chromStart"] + twopfive - 1
         df.loc[index, "chromEnd_new"]   = row["chromEnd"] - twopfive + 1
     return df
@@ -235,10 +292,13 @@ def find_antisense_spliced_in_intron(intron_df, tx_df):
      the transcripts that are antisense, spliced, and in introns
     """
     gene_in_intron_pairs = []
+    gene_in_intron_same_direction = []
     for index, row in tx_df.iterrows():
         chrom = intron_df.loc[intron_df["chrom"] == row["chrom"],]
         start = chrom.loc[chrom["chromStart"] <= row["chromStart_new"],]
         stop = start.loc[start["chromEnd"] >= row["chromEnd_new"],]
+
+        # this gets the pairs of antisense transcripts
         if row["strand"] == "+":
             dfdir = stop.loc[stop["strand"] == '-',]
         elif row["strand"] == "-":
@@ -246,27 +306,243 @@ def find_antisense_spliced_in_intron(intron_df, tx_df):
         for i2, r2 in dfdir.iterrows():
             gene_in_intron_pairs.append([row["name"], r2["name"]])
             #print(gene_in_intron_pairs[-1][0], gene_in_intron_pairs[-1][1])
-    return gene_in_intron_pairs
+
+        # this gets the pairs of sense transcipts
+        if row["strand"] == "+":
+            dfdir = stop.loc[stop["strand"] == '+',]
+        elif row["strand"] == "-":
+            dfdir = stop.loc[stop["strand"] == '-',]
+        for i2, r2 in dfdir.iterrows():
+            gene_in_intron_same_direction.append([row["name"], r2["name"]])
+
+    return gene_in_intron_pairs, gene_in_intron_same_direction
 
 def main():
+    # make sure the program has the right commands
+    if len(sys.argv) != 4:
+        raise IOError("Run the program like: chep_gff2regions outprefix ref gff")
+    # now make sure that the files are correct
+    out_prefix = sys.argv[1]
+    reference = sys.argv[2]
+    if not os.path.exists(reference):
+        raise OSError("  - The reference genome does not exist %s" % reference)
+    if os.path.splitext(reference)[1] not in [".fasta", ".fa"]:
+        raise IOError("  - The reference genome must be a .fasta or .fa file. It cannot be gzipped")
+    gff_file = sys.argv[3]
+    if not os.path.exists(gff_file):
+        raise OSError("  - The gff file does not exist %s" % gff_file)
+    if os.path.splitext(gff_file)[1] not in [".gff"]:
+        raise IOError("  - The gff must have the ending '.gff'. It cannot be gzipped.")
+    # make sure that all the files in the path exist
+    split_paths = out_prefix.split('/')[:-1]
+    for i in range(len(split_paths)):
+        thisdir = "/".join(split_paths[0:i+1])
+        print("trying to make directory {}".format(thisdir))
+        if not os.path.exists(thisdir):
+            try:
+                os.mkdir(thisdir)
+            except OSError:
+                print ("  - Creation of the directory %s failed" % thisdir)
+            else:
+                print ("  - Successfully created the directory %s " % thisdir)
+
+    # first generate the bed file of the whole genome
+    whole_genome_bed = "{}_whole_genome.bed".format(out_prefix)
+    whole_genome_coords = "{}_whole_genome.genfile".format(out_prefix)
+    print("Running samtools faidx")
+    run_this = "samtools faidx {}".format(reference)
+    runner(run_this)
+    print("generating whole-genome bed")
+    fai = "{}.fai".format(reference)
+    write_here = open(whole_genome_bed, "w")
+    with open(fai, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                splitd = line.split()
+                print("{}\t0\t{}".format(
+                       splitd[0], splitd[1]),
+                       file = write_here)
+    write_here.close()
+    run_this = """sort -k1,1 -k2,2n {} | cut -f1,3 > {}""".format(
+            whole_genome_bed, whole_genome_coords)
+    runner(run_this)
+
+    assert os.path.exists(whole_genome_bed)
+    assert os.path.exists(whole_genome_coords)
+
+    # now generate a bed file of the transcript regions
+    print("generating a bed file of genic regions")
+    genic_bed = "{}_genic.bed".format(out_prefix)
+    temp_bed = "{}_temp.bed".format(out_prefix)
+    write_here = open(temp_bed, "w")
+    with open(gff_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                splitd = line.split()
+                if splitd[2] == "transcript":
+                    print("{}\t{}\t{}".format(
+                         splitd[0], splitd[3], splitd[4]),
+                         file = write_here)
+    write_here.close()
+    run_this = """sort -k1,1 -k2,2n {} | \
+               bedtools merge | bedtools sort > {}""".format(temp_bed, genic_bed)
+    runner(run_this)
+    os.remove(temp_bed)
+    assert os.path.exists(genic_bed)
+
+    # now generate a bed file of the intergenic regions
+    print("generating a bed file of intergenic regions")
+    intergenic_bed = "{}_intergenic.bed".format(out_prefix)
+    run_this = "bedtools complement -i {} -g {} > {}".format(
+        genic_bed, whole_genome_coords, intergenic_bed)
+    runner(run_this)
+    assert os.path.exists(intergenic_bed)
+
+    # now merge the intergenic and genic, make sure it matches the genFile exactly
+    print("verifying that the genic and intergenic regions are complete")
+    temp_file = "{}_intergenic_genic_merge.temp".format(out_prefix)
+    run_this = """cat {} {} | bedtools sort | bedtools merge | \
+                sort -k1,1 -k2,2n | cut -f1,3 > {}""".format(
+                genic_bed, intergenic_bed, temp_file)
+    runner(run_this)
+    assert os.path.exists(temp_file)
+    run_this = """diff {} {}""".format(whole_genome_coords, temp_file)
+    process = subprocess.Popen(run_this,
+                     stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE,
+                     shell = True)
+    stdout, stderr = process.communicate()
+    assert stdout.decode('utf-8').strip() == ""
+    os.remove(temp_file)
+
+    # now generate a bed file of the exonic regions
+    print("generating a bed file of exonic regions")
+    exonic_bed = "{}_exonic.bed".format(out_prefix)
+    temp_bed = "{}_temp.bed".format(out_prefix)
+    write_here = open(temp_bed, "w")
+    with open(gff_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                splitd = line.split()
+                if splitd[2] == "exon":
+                    print("{}\t{}\t{}".format(
+                         splitd[0], splitd[3], splitd[4]),
+                         file = write_here)
+    write_here.close()
+    run_this = """sort -k1,1 -k2,2n {} | \
+               bedtools merge | bedtools sort > {}""".format(temp_bed, exonic_bed)
+    runner(run_this)
+    os.remove(temp_bed)
+    assert os.path.exists(exonic_bed)
+
+    # now generate a bed file of the intronic regions
+    print("generating a bed file of intronic regions")
+    intronic_bed = "{}_intronic.bed".format(out_prefix)
+    run_this = """cat {} {} | bedtools sort | bedtools merge | \
+                sort -k1,1 -k2,2n | bedtools complement -i - -g {} > {}""".format(
+        exonic_bed, intergenic_bed, whole_genome_coords, intronic_bed)
+    runner(run_this)
+    assert os.path.exists(intronic_bed)
+
+    # now merge the exonic and intronic, make sure it matches genic
+    print("verifying that the exonic and intronic regions are complete")
+    temp_file = "{}_exonic_intronic_merge.temp".format(out_prefix)
+    run_this = """cat {} {} | bedtools sort | bedtools merge | \
+                sort -k1,1 -k2,2n > {}""".format(
+                exonic_bed, intronic_bed, temp_file)
+    runner(run_this)
+    assert os.path.exists(temp_file)
+    run_this = """diff {} {}""".format(genic_bed, temp_file)
+    process = subprocess.Popen(run_this,
+                     stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE,
+                     shell = True)
+    stdout, stderr = process.communicate()
+    assert stdout.decode('utf-8').strip() == ""
+    os.remove(temp_file)
+
+    # now generate a bed file of the noncoding regions
+    print("generating a bed file of noncoding regions")
+    noncoding_bed = "{}_noncoding.bed".format(out_prefix)
+    run_this = """cat {} {} | bedtools sort | bedtools merge | \
+                sort -k1,1 -k2,2n > {}""".format(
+        intronic_bed, intergenic_bed, noncoding_bed)
+    runner(run_this)
+    assert os.path.exists(noncoding_bed)
+
+    #calculate % of the genome stats
+    run_this = """awk '{{sum = sum + $2}} END{{print(sum)}}' {}""".format(whole_genome_coords)
+    whole_genome_size = int(runner_w_output(run_this))
+    run_this = """awk '{{sum = sum + $3 - $2 }} END{{print(sum)}}' {}""".format(exonic_bed)
+    exonic_size = int(runner_w_output(run_this))
+    run_this = """awk '{{sum = sum + $3 - $2 }} END{{print(sum)}}' {}""".format(genic_bed)
+    genic_size = int(runner_w_output(run_this))
+    run_this = """awk '{{sum = sum + $3 - $2 }} END{{print(sum)}}' {}""".format(intergenic_bed)
+    intergenic_size = int(runner_w_output(run_this))
+    run_this = """awk '{{sum = sum + $3 - $2 }} END{{print(sum)}}' {}""".format(intronic_bed)
+    intronic_size = int(runner_w_output(run_this))
+    run_this = """awk '{{sum = sum + $3 - $2 }} END{{print(sum)}}' {}""".format(noncoding_bed)
+    noncoding_size = int(runner_w_output(run_this))
+
+    genome_stats = "{}_genome_stats.txt".format(out_prefix)
+    outfile = open(genome_stats, "w")
+    for writehere in [sys.stdout, outfile]:
+        print("# whole_genome_size: {}".format(whole_genome_size),
+              file=writehere)
+        print("region\tnum_bases\tpercent_of_total", file = writehere)
+        print("exonic\t{}\t{:.4f}".format(
+              exonic_size,
+              (exonic_size/whole_genome_size)*100), file = writehere)
+        print("genic\t{}\t{:.4f}".format(
+              genic_size,
+              (genic_size/whole_genome_size)*100), file = writehere)
+        print("intergenic\t{}\t{:.4f}".format(
+              intergenic_size,
+              (intergenic_size/whole_genome_size)*100), file = writehere)
+        print("intronic\t{}\t{:.4f}".format(
+              intronic_size,
+              (intronic_size/whole_genome_size)*100), file = writehere)
+        print("noncoding\t{}\t{:.4f}".format(
+              noncoding_size,
+              (noncoding_size/whole_genome_size)*100), file = writehere)
+        intergenic_genic = intergenic_size + genic_size
+        print("intergenic_genic\t{}\t{:.4f}".format(
+              intergenic_genic,
+              (intergenic_genic/whole_genome_size)*100), file = writehere)
+        intergenic_exonic_intronic = intergenic_size + exonic_size + intronic_size
+        print("intergenic_exonic_intronic\t{}\t{:.4f}".format(
+              intergenic_exonic_intronic,
+              (intergenic_exonic_intronic/whole_genome_size)*100), file = writehere)
+
+    outfile.close()
+
+    print("now finding transcripts located within the introns of other transcripts")
+    # THIS PART FINDS TRANSCRIPTS that are contained within transcripts
     # This part generates the intron regions
-    df  = gff_to_introns(sys.argv[1])
+    df  = gff_to_introns(gff_file)
     df2 = df_to_995p(df)
-    with open("intronic.bed", "w") as f:
+    with open("{}_custom_introns.bed".format(out_prefix), "w") as f:
         print_df_to_bed(df2, f)
 
     # This part looks in the GFF and the introns, and finds the ones that
     # have 95% within an intron, and antisense.
     # first get the genes
-    transcript_df = gff_to_spliced_transcripts_df(sys.argv[1])
-    with open("transcripts.bed", "w") as f:
-        print_df_to_bed(transcript_df, f)
-    tx_df_ss = transcript_95per_start_stop(transcript_df)
+    transcript_df = gff_to_spliced_transcripts_df(gff_file)
+    tx_df_ss = transcript_98per_start_stop(transcript_df)
 
     # now get the pairs of transcripts
-    pairs = find_antisense_spliced_in_intron(df2, tx_df_ss)
-    with open("antisense_spliced_in_intron_pairs.txt", "w") as f:
-        for entry in pairs:
+    antisense_pairs, sense_pairs = find_antisense_spliced_in_intron(df2, tx_df_ss)
+    with open("{}_antisense_spliced_in_intron_pairs.txt".format(out_prefix), "w") as f:
+        for entry in antisense_pairs:
+            print("{}\t{}".format(
+                entry[0],
+                entry[1]), file = f)
+
+    with open("{}_sense_spliced_in_intron_pairs.txt".format(out_prefix), "w") as f:
+        for entry in sense_pairs:
             print("{}\t{}".format(
                 entry[0],
                 entry[1]), file = f)
