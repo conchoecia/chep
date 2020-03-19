@@ -43,15 +43,32 @@ Required Software:
   - awk
 
 The output is:
-  - out_prefix_transcripts.bed file.
-  - out_prefix_sense_spliced_in_intron_pairs.txt
-    - A list of transcripts for which 98% of the transcript sits within a single 
-      intron. In this file the transcript must have the same sense as the
-      enclosing intron. The file with two fields. Field 1 is the transcript.
-      Field 2 is the intron in which it sits.
-  - outprefix_antisense_spliced_in_intron_pairs.txt
-    - Same as above, but the transcript in the intron must be antisense to the
-      enclosing transcript.
+  # files related to getting bed files of different genomic regions
+  - prefix_whole_genome.bed
+    - just a bed file of the whole genome
+  - prefix_whole_genome.genfile
+    - the bedtools genFile format. Like a bed file, but no start.
+  - prefix_exonic.bed
+    - The exonic regions
+  - prefix_genic.bed
+    - The transcribed regions
+  - prefix_intergenic.bed
+    - The regions not transcribed
+  - prefix_intronic.bed
+    - The intronic regions
+  - prefix_noncoding.bed
+    - The intronic and intergenic regions
+  - prefix_genome_stats.txt
+    - Stats of the the percent of the genome in each category
+  # files related to finding transcripts contained in introns
+  - prefix_custom_introns.bed
+    - introns with special cutoffs to remove the longest of introns
+  - prefix_sense_spliced_in_intron_pairs.txt
+    - genes that are contained in introns that are the same sense as the intron
+    - 98% of the gene must be in a single intron
+  - prefix_antisense_spliced_in_intron_pairs.txt
+    - genes that are contained in introns that are antisense to the intron
+    - 98% of the gene must be in a single intron
 """
 
 import os
