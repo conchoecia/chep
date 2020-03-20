@@ -24,7 +24,7 @@ It works by scanning a bam file with `mpileup` and asking the questions, "What i
   
 This 3D histogram is then used to generate plots of the marginal histogram of read depths across the whole genome (top panel), the heterozygosity calculated at every specific read depth (middle panel), and a plot of the underlying 3D histogram (bottom panel).
 
-![het](doc/marginal_het_het_plot.png){:height="50%" width="50%"}
+![het](doc/marginal_het_het_plot.png)
 
 Starting with the bottom panel - this is the plot of the 3D histogram. The purpose of this plot is to visualize where the large smudge is that falls at approximately 1/2 of the read depth coverage at that position. This smudge is a histogram of the heterozygous positions in the genome, supported by sequencing reads aligned in a bam file. The red dashed lines are the bounding lines for calculating heterozygosity later on. In later calculations `chep` considers everything between the top-most and bottom-most red dashed lines to be heterozygous sites. Everything above the top-most red dashed line is considered to be a homozygous site. The blue vertical line is drawn through the region of the plot that will most accurately estimate the SNP/short-indel heterozygosity.
 
