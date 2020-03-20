@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mplpatches
 from matplotlib import rc
 import numpy as np
+import os
 import sys
 
 rc('text', usetex=True)
@@ -29,10 +30,19 @@ def argparser():
     parser = argparse.ArgumentParser(description='clustergenerator')
     parser.add_argument('-f', '--filename',
                         type=str,
+                        required=True,
                         help="""the filename to the histogram. Format is:
                           Col1 - read depth
                           Col2 - number of ref alleles
                           Col3 - count""")
+    parser.add_argument('-g', '--genome',
+                        type=str,
+                        required=True,
+                        help="""The genome fasta file.""")
+    parser.add_argument('-o', '--outprefix',
+                        type=str,
+                        required=True,
+                        help="""The prefix of the output files.""")
     parser.add_argument('-x', '--minX',
                         type=int,
                         help="""only plot the data starting at this X value""")
@@ -46,12 +56,12 @@ def argparser():
     args = vars(args)
     return args
 
-def plot_simple_figure(fname, xmin, xmax, scale, dark=False):
+def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False):
     maxval = len(scale)-1
-    if args["dark"]:
+    if dark:
         plt.style.use('dark_background')
 
-    df = pd.read_csv(args["filename"], header=None, delim_whitespace=True)
+    df = pd.read_csv(fname, header=None, delim_whitespace=True)
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8,0.8])
 
@@ -102,18 +112,19 @@ def plot_simple_figure(fname, xmin, xmax, scale, dark=False):
         panel2.add_patch(rectangle1)
 
     if dark:
-        plt.savefig("simple_het_plot_dark.pdf")
-        plt.savefig("simple_het_plot_dark.png", dpi=300)
+        plt.savefig("{}_simple_het_plot_dark.pdf".format(outprefix))
+        plt.savefig("{}_simple_het_plot_dark.png".format(outprefix), dpi=300)
     else:
-        plt.savefig("simple_het_plot.pdf")
-        plt.savefig("simple_het_plot.png", dpi=300)
+        plt.savefig("{}_simple_het_plot.pdf".format(outprefix))
+        plt.savefig("{}_simple_het_plot.png".format(outprefix), dpi=300)
 
-def figure_with_marginal_histogram(fname, xmin, xmax, scale, dark = False):
+def figure_with_marginal_histogram(fname, outprefix, xmin, xmax,
+                                   scale, dark = False):
     maxval = len(scale)-1
-    if args["dark"]:
+    if dark:
         plt.style.use('dark_background')
 
-    df = pd.read_csv(args["filename"], header=None, delim_whitespace=True)
+    df = pd.read_csv(fname, header=None, delim_whitespace=True)
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8,0.53])
     panel2=plt.axes([0.14,0.7,0.8,0.2])
@@ -135,7 +146,6 @@ def figure_with_marginal_histogram(fname, xmin, xmax, scale, dark = False):
     panel1.set_ylabel("\# of reference bases")
     panel1.tick_params(axis='both', which='both', labelsize=6)
 
-
     df.rename(columns={0: "depth", 1: "ref", 2: "count"}, inplace=True)
     df2 = df.groupby("depth")["count"].sum()
 
@@ -155,18 +165,22 @@ def figure_with_marginal_histogram(fname, xmin, xmax, scale, dark = False):
                 marker='o', linewidth=0, markersize=1)
 
     if dark:
-        plt.savefig("marginal_het_plot_dark.pdf")
-        plt.savefig("marginal_het_plot_dark.png", dpi=300)
+        plt.savefig("{}_marginal_het_plot_dark.pdf".format(outprefix))
+        plt.savefig("{}_marginal_het_plot_dark.png".format(outprefix), dpi=300)
     else:
-        plt.savefig("marginal_het_plot.pdf")
-        plt.savefig("marginal_het_plot.png", dpi=300)
+        plt.savefig("{}_marginal_het_plot.pdf".format(outprefix))
+        plt.savefig("{}_marginal_het_plot.png".format(outprefix), dpi=300)
 
-def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
+def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
     maxval = len(scale)-1
-    if args["dark"]:
+    if dark:
         plt.style.use('dark_background')
 
-    df = pd.read_csv(args["filename"], header=None, delim_whitespace=True)
+    # this df contains the 2D histogram.
+    #  - col 0 is the read coverage
+    #  - col 1 is the number of reads in that position that had the reference base
+    #  - col 2 is the number of sites with that read coverage with that many reads having the reference base
+    df = pd.read_csv(fname, header=None, delim_whitespace=True)
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8, 0.38])
     panel2=plt.axes([0.14,0.74 ,0.8,0.18])
@@ -224,7 +238,7 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
 
     het_dict = {}
     # now we calculate heterozygosity
-    df2.to_csv("df2.tsv", sep = '\t', index=True)
+    df2.to_csv("{}_depth_num_bases.tsv".format(outprefix), sep = '\t', index=True)
     for i in range(xmin, xmax +1):
         if i in df2.index:
             onex = int(df.query("depth == {} and ref >= {}".format(i, i*0.75))["count"].sum())
@@ -233,11 +247,33 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
             err  = int(df.query("depth == {} and ref < {}".format(
                             i, i*0.25))["count"].sum())
             het_dict[i] = {"depth": i,
-                           "one": onex,
-                           "half": half,
-                           "err": err,
+                           "full_cov": onex,
+                           "half_cov": half,
+                           "err_cov": err,
                            "totdepth": df2.loc[i],
+                           "pergenom": (df2.loc[i]/gsize)*100,
                            "het": (half/(onex+half))*100}
+    for i in range(xmin, xmax +1):
+        if i in het_dict:
+            for j in [5,10]:
+                full_cov = 0
+                half_cov = 0
+                err_cov = 0
+                totdepth = 0
+                for k in range(i-j, i+j+1):
+                    if k in het_dict:
+                        full_cov   += het_dict[k]["full_cov"]
+                        half_cov   += het_dict[k]["half_cov"]
+                        err_cov    += het_dict[k]["err_cov"]
+                        totdepth   += het_dict[k]["totdepth"]
+                het = (half_cov/(full_cov+half_cov))*100
+                pergenom = (totdepth/gsize)*100
+                het_dict[i]["{}flank_full_cov".format(j)] = full_cov
+                het_dict[i]["{}flank_half_cov".format(j)] = half_cov
+                het_dict[i]["{}flank_err_cov".format(j)]  = err_cov
+                het_dict[i]["{}flank_totdepth".format(j)] = totdepth
+                het_dict[i]["{}flank_pergenom".format(j)] = pergenom
+                het_dict[i]["{}flank_het".format(j)]      = het
     panel3.set_xlim([xmin, xmax])
     panel3.set_ylabel("\% Het")
     panel3.tick_params(
@@ -254,16 +290,25 @@ def fig_mhist_hetero(fname, xmin, xmax, scale, dark=False):
     panel3.plot(xs, ys, mfc =thismfc, mew=0,
                 marker='o',
                 linewidth=0, markersize=1)
+
+    cols = ["depth", "totdepth", "pergenom", "full_cov",
+            "half_cov", "err_cov", "het"]
+    for j in [5,10]:
+        for thing in ["totdepth", "pergenom", "full_cov",
+                      "half_cov", "err_cov", "het"]:
+            cols.append("{}flank_{}".format(j, thing))
+
     hdf = pd.DataFrame.from_dict(het_dict, orient="index",
-            columns=["depth", "totdepth", "one", "half", "err", "het"])
-    hdf.to_csv("het_by_position.tsv", sep = '\t', index=False)
+            columns=cols)
+    hdf.to_csv("{}_het_by_position.tsv".format(outprefix),
+               sep = '\t', index=False)
 
     if dark:
-        plt.savefig("marginal_het_het_plot_dark.pdf")
-        plt.savefig("marginal_het_het_plot_dark.png", dpi=300)
+        plt.savefig("{}_marginal_het_het_plot_dark.pdf".format(outprefix))
+        plt.savefig("{}_marginal_het_het_plot_dark.png".format(outprefix), dpi=300)
     else:
-        plt.savefig("marginal_het_het_plot.pdf")
-        plt.savefig("marginal_het_het_plot.png", dpi=300)
+        plt.savefig("{}_marginal_het_het_plot.pdf".format(outprefix))
+        plt.savefig("{}_marginal_het_het_plot.png".format(outprefix), dpi=300)
 
 def determine_color_scheme(fname, xmin, xmax, dark=False):
     """
@@ -284,14 +329,36 @@ def determine_color_scheme(fname, xmin, xmax, dark=False):
     scale = np.linspace(0,1,scalemax+1)
     return scale
 
+def get_genome_size(genome_file):
+    """
+    This gets the genome assembly size to calculate the percent of the
+    genome in each size bin.
+    """
+    if not os.path.exists(genome_file):
+        raise IOError("The genome assembly file doesn't exist")
+    ending = os.path.splitext(genome_file)[-1]
+    if ending not in [".fasta", ".fa"]:
+        raise IOError("The genome assembly file must end in .fa or .fasta")
+    gsize = 0
+    with open(genome_file, "r") as f:
+        for line in f:
+            line=line.strip()
+            if line[0] != ">":
+                gsize += len(line)
+    return gsize
+
 def main(args):
+    genome_size = get_genome_size(args["genome"])
+    #print("genome size: ", genome_size)
     scale = determine_color_scheme(args["filename"], args["minX"], args["maxX"], args["dark"])
-    plot_simple_figure(args["filename"], args["minX"],
+    plot_simple_figure(args["filename"], args["outprefix"], args["minX"],
                        args["maxX"], scale, args["dark"])
-    figure_with_marginal_histogram(args["filename"], args["minX"],
-                                   args["maxX"], scale, args["dark"])
-    fig_mhist_hetero(args["filename"], args["minX"],
-                     args["maxX"], scale, args["dark"])
+    figure_with_marginal_histogram(args["filename"], args["outprefix"],
+                                   args["minX"], args["maxX"],
+                                   scale, args["dark"])
+    fig_mhist_hetero(args["filename"], args["outprefix"],
+                     args["minX"], args["maxX"],
+                     scale, genome_size, args["dark"])
 
 if __name__ == "__main__":
     args = argparser()
