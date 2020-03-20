@@ -1,13 +1,14 @@
 #!/usr/bin/env python
-
 """
+program: chep_gff2all
+contact: Darrin Schultz - dschultz@mbari.org
+
 This program looks at every gene model in a transcriptome
  and outputs a bed file of the different genomic regions.
  It also outputs a list of genes that are contained within
  introns.
 
-Usage:
-  chep_gff2regions outprefix ref gff
+Usage: chep_gff2regions outprefix ref.fa annotation.gff
 
 Regions:
   - Whole genome .bed file
@@ -334,10 +335,15 @@ def find_antisense_spliced_in_intron(intron_df, tx_df):
 
     return gene_in_intron_pairs, gene_in_intron_same_direction
 
+def print_help():
+    """Just prints a help message for the use"""
+    print(__doc__)
+    sys.exit()
+
 def main():
     # make sure the program has the right commands
     if len(sys.argv) != 4:
-        raise IOError("Run the program like: chep_gff2regions outprefix ref gff")
+        print_help()
     # now make sure that the files are correct
     out_prefix = sys.argv[1]
     reference = sys.argv[2]
@@ -564,5 +570,5 @@ def main():
                 entry[0],
                 entry[1]), file = f)
 
-if __name__== "__main__":
+if __name__ == "__main__":
     main()
