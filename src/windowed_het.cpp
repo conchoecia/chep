@@ -161,12 +161,13 @@ int main(int argc, char **argv) {
     //exit modifications. now log where we were.
     stop = this_pos;
   }
+  //we're at the end. print out the het for the last window
+  het = 100.0*((float)num_het_sites/(float)num_sites_measured);
+  if (isnan(het)){
+    het = 0;
+  }
+  uint targ_start = next_stop - vars.window + 1;
+  std::cout << prev_chrom << "\t" << targ_start << "\t" << start << "\t" << stop << "\t" << next_stop << "\t" << num_sites_measured << "\t" << num_het_sites << "\t" << het <<"\n";
 
-  ////print out the entire table
-  //for(auto const &key1 : table) {
-  //  for(auto const &key2 : key1.second) {
-  //    std::cout << key1.first << "\t" << key2.first << "\t" << table[key1.first][key2.first] << "\n";
-  //  }
-  //}
   return 0;
 }
