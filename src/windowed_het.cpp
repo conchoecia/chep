@@ -207,8 +207,22 @@ int main(int argc, char **argv) {
   if (isnan(het)){
     het = 0;
   }
+  //calculate the median read depth
+  depth_counter.sort();
+  uint median_depth = *std::next(depth_counter.begin(), depth_counter.size()/2);
+  //calculate the mean read depth
+  double mean_depth = std::accumulate(depth_counter.begin(), depth_counter.end(), 0.0) / depth_counter.size();
+  // calculate the sd of the read depth
+  double sd = 0;
+  for (auto const& v : depth_counter) {
+    sd += pow(v - mean_depth, 2);
+  }
+  sd=sqrt(sd/depth_counter.size());
+  // calculate the percent GC
+  pergc = 100*((float)num_GC/(float)num_non_N);
+  //calculate the target start
   uint targ_start = next_stop - vars.window + 1;
-  std::cout << prev_chrom << "\t" << targ_start << "\t" << start << "\t" << stop << "\t" << next_stop << "\t" << num_sites_measured << "\t" << num_het_sites << "\t" << het <<"\n";
+  std::cout << prev_chrom << "\t" << targ_start << "\t" << start << "\t" << stop << "\t" << next_stop << "\t" << num_sites_measured << "\t" << num_het_sites << "\t" << het << "\t" << median_depth << "\t" << mean_depth << "\t" << sd << "\t" << pergc << "\n";
 
   return 0;
 }
