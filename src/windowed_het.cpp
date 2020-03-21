@@ -63,6 +63,7 @@ Vars process_cl_args(int argc, char **argv){
   return(vars);
 }
 
+
 int main(int argc, char **argv) {
   Vars vars = process_cl_args(argc, argv);
 
@@ -80,7 +81,7 @@ int main(int argc, char **argv) {
   std::cout << "# flank=" << vars.flank << "\n";
   std::cout << "# window=" << vars.window << "\n";
   std::cout << "# Heterozygous sites are considered as:\n";
-  std::cout << "#  For a read depth at col1(depth), a site with >= col2(min) and <= col(max)3\n"; 
+  std::cout << "#  For a read depth at col1(depth), a site with >= col2(min) and <= col(max)3\n";
   std::cout << "#   reads matching the ref is considered a heterozygous site.\n"; 
   std::cout << "# depth min max\n";
   std::map<uint,std::tuple<uint,uint>> table;
@@ -101,7 +102,7 @@ int main(int argc, char **argv) {
   uint num_het_sites      = 0;
   double het = 0;
   //print out the header
-  std::cout << "chrom\tstart\tstop\ttarget\tnum_sites_mes\thet_sites\thet\n";
+  std::cout << "chrom\ttarg_start\tstart\tstop\ttarg_stop\tnum_sites_mes\thet_sites\thet\n";
 
   while(std::getline(std::cin, line)) {     // '\n' is the default delimiter
     std::vector<std::string> tokens;
@@ -121,8 +122,16 @@ int main(int argc, char **argv) {
         //we've just stepped into the mpileup output. don't do anything
       } else {
         het = 100.0*((float)num_het_sites/(float)num_sites_measured);
-        std::cout << prev_chrom << "\t" << start << "\t" << stop << "\t" << next_stop << "\t" << num_sites_measured << "\t" << num_het_sites << "\t" << het <<"\n";
-        next_stop += vars.window;
+        if (isnan(het)){
+          het = 0;
+        }
+        uint targ_start = next_stop - vars.window + 1;
+        std::cout << prev_chrom << "\t" << targ_start << "\t" << start << "\t" << stop << "\t" << next_stop << "\t" << num_sites_measured << "\t" << num_het_sites << "\t" << het <<"\n";
+        if (tokens[0].compare(prev_chrom) != 0){
+          next_stop = vars.window;
+        } else {
+          next_stop += vars.window;
+        }
       }
       num_sites_measured = 0;
       num_het_sites = 0;
