@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
   uint num_het_sites      = 0;
   double het = 0;
   //print out the header
-  std::cout << "chrom\tstart\tstop\ttarget\n";
+  std::cout << "chrom\tstart\tstop\ttarget\tnum_sites_mes\thet_sites\thet\n";
 
   while(std::getline(std::cin, line)) {     // '\n' is the default delimiter
     std::vector<std::string> tokens;
