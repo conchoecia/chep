@@ -12,8 +12,12 @@
 void help(void){
   printf(
   " \n"
-  "usage: \n"
-  "  samtools mpileup -f ref.fa reads_to_ref.bam | chep_windowed_het -f 10 -p 178 -w 50000\n\n"
+  "usage (single-threaded): \n"
+  "  samtools mpileup -f ref.fa reads_to_ref.bam | chep_windowed_het -f 10 -p 178 -w 50000\n"
+  "\n"
+  "usage (multi-threaded): \n"
+  "  cat genome.bed | parallel -P 23 \"echo {} > {}.temp; samtools mpileup -f ref.fa -l {}.temp reads_to_ref.bam | chep_windowed_het -f 10 -p 178 -w 50000 >> unsorted.het; rm {}.temp\"\n"
+  "  For a better explanation, see https://github.com/conchoecia/chep \n"
   "Program: windowed het\n"
   "Author: DTS@ucsc.edu\n\n"
 
