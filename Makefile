@@ -1,7 +1,6 @@
 CPPF=-O3 -std=c++11
 
-all: bin bin/chep_pileup_to_array  bin/chep_plot bin/chep_gff2all
-development: bin/chep_windowed_het
+all: bin bin/chep_pileup_to_array bin/chep_windowed_het bin/chep_plot bin/chep_gff2all
 
 bin:
 	mkdir bin
@@ -23,6 +22,6 @@ bin/chep_gff2all: scripts/gff_to_intron_bed.py
 	cd bin; \
 	ln -s ../scripts/gff_to_intron_bed.py chep_gff2all;\
 	cd ..
-    
+
 #clean:
 #   rm hello.o hello.exe
