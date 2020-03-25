@@ -12,12 +12,12 @@ Usage: chep_gff2regions outprefix ref.fa annotation.gff
 
 Regions:
   - Whole genome .bed file
-  - Genic Regions
-    - Includes introns and exons
   - Exonic regions
     - All exons, overlaps merged
   - Intronic regions
     - All intronic regions merged, No overlap whatsoever with exons.
+  - Genic Regions
+    - Includes introns and exons
   - Intergenic regions
     - All regions that do not contain genic regions
   - Noncoding
@@ -76,6 +76,8 @@ import os
 import sys
 import numpy as np
 import pandas as pd
+import random
+import string
 import subprocess
 
 def runner(run_this):
@@ -99,123 +101,7 @@ def runner_w_output(run_this):
     stdout, stderr = process.communicate()
     return stdout.decode('utf-8').strip()
 
-def parse_intervals(TG_list):
-    intervals = []
-    start = -1
-    stop = -1
-    in_intron = False
-    for i in range(len(TG_list)):
-        if TG_list[i] == 1:
-            if not in_intron:
-                # first time encountering this intronic region
-                start = i
-                in_intron = True
-            else:
-                # we're already in the intronic region
-                stop = i
-        elif TG_list[i] == 0:
-            # we may have just stepped out of the intron
-            if in_intron:
-                if stop != -1:
-                    intervals.append([start,stop])
-                start = -1
-                stop = -1
-                in_intron = False
-            else:
-                # we don't need to do anything
-                pass
-    if start != -1 and stop != -1:
-        # the last intergenic region buts up against the
-        #  end of the transcript. This probably won't happen
-        intervals.append([start,stop])
-    return intervals
-
-def intervals_to_lists(TG_chr, thisgene, TG_start, intervals, strand):
-    """
-    adds the important information to the df
-    """
-    return_these = []
-    for i in range(len(intervals)):
-        entry = intervals[i]
-        start = entry[0]
-        stop = entry[1]
-        return_these.append([TG_chr,
-                    TG_start + start,
-                    TG_start + stop,
-                    "{}.intronic{}".format(thisgene, i+1),
-                    ".",
-                    strand])
-        #add_this = {}
-        #add_this["chrom"]      = TG_chr
-        #add_this["chromStart"] = TG_start + start
-        #add_this["chromEnd"]   = TG_start + stop
-        #add_this["name"]       = "{}.intronic{}".format(thisgene, i+1)
-        #add_this["score"]      = "."
-        #add_this["strand"]     = strand
-        #df = df.append(add_this, ignore_index=True)
-    return return_these
-
-def gff_to_introns(gff_file):
-    add_to_df = []
-    with open(gff_file, "r") as f:
-        thisgene = ""
-        #TG = thisgene
-        TG_chr = ""
-        TG_start = -1
-        TG_stop = -1
-        TG_strand = '.'
-        TG_list = []
-        for line in f:
-            if line.strip() and (line.strip()[0] != "#"):
-                splitd = line.split()
-                # we're now parsing a gff file.
-                # fields
-                # 0=chromosome
-                # 1=source
-                # 2=type
-                # 3=start
-                # 4=stop
-                # 5=score
-                # 6=strand
-                # 7=dunno
-                # 8=gene
-                if splitd[2] == "gene":
-                    #we have found a new gene. This should trigger outputting
-                    # the previous gene's introns' bed first.
-                    ID = splitd[8].split(";")[0].replace("ID=", "")
-                    if thisgene == "":
-                        #first thing in the file
-                        pass
-                    else:
-                        # TODO output all the previous gene's info here.
-                        intervals = parse_intervals(TG_list)
-                        add_to_df += intervals_to_lists(TG_chr, thisgene,
-                                                 TG_start, intervals, TG_strand)
-                    # No matter what we did, store thisgene,
-                    #  the start, the stop, the chromosome
-                    TG_chr = splitd[0].strip()
-                    TG_start = int(splitd[3])
-                    TG_stop  = int(splitd[4])
-                    TG_strand = splitd[6]
-                    thisgene = ID
-                    # turn off the 1s if there is exon there.
-                    TG_list = [1]*(TG_stop - TG_start + 1)
-                elif splitd[2] == "exon":
-                    # we only care about where there are exons
-                    sta = int(splitd[3]) - TG_start
-                    sto  = int(splitd[4]) - TG_start + 1
-                    for i in range( sta, sto):
-                        # There is an exon here, so turn off the intron bit
-                        TG_list[i] = 0
-        intervals = parse_intervals(TG_list)
-        add_to_df += intervals_to_lists(TG_chr, thisgene,
-                                 TG_start, intervals, TG_strand)
-    df = pd.DataFrame(add_to_df,
-                      columns=['chrom', 'chromStart', 'chromEnd',
-                               'name', 'score', 'strand'])
-    return df
-
-def df_to_995p(df):
+def intron_bed_to_995p(intronbed):
     """
     this removes the introns in the 0.5th largest percentile
     percentile   length
@@ -231,6 +117,8 @@ def df_to_995p(df):
 
     functions to remove false positives, or genes that are obviously too long.
     """
+    df = pd.read_csv(intronbed, header=None, sep='\t', comment='#')
+    df.columns = ["chrom", "chromStart", "chromEnd"]
     df["length"] = df["chromEnd"] - df["chromStart"] + 1
     filter_cutoff = int(np.percentile(df["length"], 99.5))
     return df.loc[df["length"] <= filter_cutoff, ]
@@ -258,7 +146,8 @@ def gff_to_spliced_transcripts_df(gff_file):
     exon_counter = 0
     with open(gff_file, "r") as f:
         for line in f:
-            if line.strip() and line.strip()[0] != '#':
+            line = line.strip()
+            if line and (line[0] != '#'):
                 splitd = line.split()
                 # we're now parsing a gff file.
                 # fields
@@ -304,17 +193,26 @@ def transcript_98per_start_stop(df):
         df.loc[index, "chromEnd_new"]   = row["chromEnd"] - twopfive + 1
     return df
 
-def find_antisense_spliced_in_intron(intron_df, tx_df):
+def find_antisense_spliced_in_intron(ranges, tx_df):
     """
-    takes a df of introns and of transcripts, then finds
+    takes a dict of transcript information and a df of transcripts, then finds
      the transcripts that are antisense, spliced, and in introns
     """
+    # first convert the dict objext of transcript ranges to
+    #  a pandas dataframe that we will use to look up the strandedness
+    transcript_df = pd.DataFrame.from_records(ranges).T
+    print(transcript_df)
+
     gene_in_intron_pairs = []
     gene_in_intron_same_direction = []
+    #print("these are the colnames of the transcript_df")
+    #print(transcript_df.columns)
+    #print("these are the colnames of the tx_df")
+    #print(tx_df.columns)
     for index, row in tx_df.iterrows():
-        chrom = intron_df.loc[intron_df["chrom"] == row["chrom"],]
-        start = chrom.loc[chrom["chromStart"] <= row["chromStart_new"],]
-        stop = start.loc[start["chromEnd"] >= row["chromEnd_new"],]
+        chrom = transcript_df.loc[transcript_df["chrom"] == row["chrom"],]
+        start = chrom.loc[chrom["start"] < row["chromStart_new"],]
+        stop = start.loc[start["stop"] > row["chromEnd_new"],]
 
         # this gets the pairs of antisense transcripts
         if row["strand"] == "+":
@@ -322,7 +220,7 @@ def find_antisense_spliced_in_intron(intron_df, tx_df):
         elif row["strand"] == "-":
             dfdir = stop.loc[stop["strand"] == '+',]
         for i2, r2 in dfdir.iterrows():
-            gene_in_intron_pairs.append([row["name"], r2["name"]])
+            gene_in_intron_pairs.append([row["name"], r2["seqname"]])
             #print(gene_in_intron_pairs[-1][0], gene_in_intron_pairs[-1][1])
 
         # this gets the pairs of sense transcipts
@@ -331,7 +229,7 @@ def find_antisense_spliced_in_intron(intron_df, tx_df):
         elif row["strand"] == "-":
             dfdir = stop.loc[stop["strand"] == '-',]
         for i2, r2 in dfdir.iterrows():
-            gene_in_intron_same_direction.append([row["name"], r2["name"]])
+            gene_in_intron_same_direction.append([row["name"], r2["seqname"]])
 
     return gene_in_intron_pairs, gene_in_intron_same_direction
 
@@ -339,6 +237,78 @@ def print_help():
     """Just prints a help message for the use"""
     print(__doc__)
     sys.exit()
+
+def parent_from_gff_comment(commentline):
+    """
+    takes a comment string from a gff file and returns the parent sequence ID
+    """
+    temp = [x for x in commentline.split(";") if x.startswith("Parent=")][0]
+    strip_start = ["rna-" #In hg38 the annotation Parents start with rna- for some reason
+                   ]
+    for strip_this in strip_start:
+        if temp.startswith(strip_this):
+            temp = temp.replace(strip_this,"")
+    return temp
+
+def randomString(stringLength=10):
+    """Generate a random string of fixed length """
+    letters = string.ascii_lowercase
+    return ''.join(random.choice(letters) for i in range(stringLength))
+
+def gff_coding_intervals(gfffile):
+    """
+    Returns a dict with this structure.
+     Coding regions defined here:
+         ranges[parent] = {"start": start, "stop": stop,
+                           "chrom": chrom, "direction": direction,
+                           "seqname": parent}
+    """
+    ranges = {}
+    with open(gfffile, "r") as f:
+        for line in f:
+            line=line.strip()
+            if line and (line[0] != '#'):
+                splitd = line.split()
+                if splitd[2] == "exon":
+                    chrom = splitd[0]
+                    start = int(splitd[3])
+                    stop = int(splitd[4])
+                    direction = splitd[6]
+                    parent = parent_from_gff_comment(splitd[8])
+                    if parent not in ranges:
+                        ranges[parent] = {"start": start, "stop": stop,
+                                          "chrom": chrom, "strand": direction,
+                                          "seqname": parent}
+                    else:
+                        if start < ranges[parent]["start"]:
+                            ranges[parent]["start"] = start
+                        if stop > ranges[parent]["stop"]:
+                            ranges[parent]["stop"] = stop
+                        if chrom != ranges[parent]["chrom"]:
+                            print("""You have a gene that spans multiple scaffolds.
+                            This is not good. {}""".format(parent))
+    return ranges
+
+
+def gff_to_genic_bed(ranges, genic_bed):
+    """
+    Takes an exon ranges dict and outputs a file of genic regions using the exons
+     as the delimiters
+    """
+    temp_bed = "{}_temp.bed".format(randomString())
+    with open(temp_bed, "w") as f:
+        for key in ranges:
+            print("{}\t{}\t{}\t{}\t.\t{}".format(
+                ranges[key]["chrom"],
+                ranges[key]["start"],
+                ranges[key]["stop"],
+                ranges[key]["seqname"],
+                ranges[key]["strand"]),
+                  file = f)
+    run_this = """sort -k1,1 -k2,2n {} | \
+               bedtools merge | bedtools sort > {}""".format(temp_bed, genic_bed)
+    runner(run_this)
+    os.remove(temp_bed)
 
 def main():
     # make sure the program has the right commands
@@ -349,8 +319,8 @@ def main():
     reference = sys.argv[2]
     if not os.path.exists(reference):
         raise OSError("  - The reference genome does not exist %s" % reference)
-    if os.path.splitext(reference)[1] not in [".fasta", ".fa"]:
-        raise IOError("  - The reference genome must be a .fasta or .fa file. It cannot be gzipped")
+    if os.path.splitext(reference)[1] not in [".fasta", ".fa", ".fna"]:
+        raise IOError("  - The reference genome must be a .fasta, .fa, or .fna file. It cannot be gzipped")
     gff_file = sys.argv[3]
     if not os.path.exists(gff_file):
         raise OSError("  - The gff file does not exist %s" % gff_file)
@@ -381,7 +351,7 @@ def main():
     with open(fai, "r") as f:
         for line in f:
             line = line.strip()
-            if line:
+            if line and (line[0] != '#'):
                 splitd = line.split()
                 print("{}\t0\t{}".format(
                        splitd[0], splitd[1]),
@@ -397,22 +367,8 @@ def main():
     # now generate a bed file of the transcript regions
     print("generating a bed file of genic regions")
     genic_bed = "{}_genic.bed".format(out_prefix)
-    temp_bed = "{}_temp.bed".format(out_prefix)
-    write_here = open(temp_bed, "w")
-    with open(gff_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                splitd = line.split()
-                if splitd[2] == "transcript":
-                    print("{}\t{}\t{}".format(
-                         splitd[0], splitd[3], splitd[4]),
-                         file = write_here)
-    write_here.close()
-    run_this = """sort -k1,1 -k2,2n {} | \
-               bedtools merge | bedtools sort > {}""".format(temp_bed, genic_bed)
-    runner(run_this)
-    os.remove(temp_bed)
+    exon_ranges = gff_coding_intervals(gff_file)
+    gff_to_genic_bed(exon_ranges, genic_bed)
     assert os.path.exists(genic_bed)
 
     # now generate a bed file of the intergenic regions
@@ -448,7 +404,7 @@ def main():
     with open(gff_file, "r") as f:
         for line in f:
             line = line.strip()
-            if line:
+            if line and (line[0] != '#'):
                 splitd = line.split()
                 if splitd[2] == "exon":
                     print("{}\t{}\t{}".format(
@@ -484,7 +440,9 @@ def main():
                      stderr=subprocess.PIPE,
                      shell = True)
     stdout, stderr = process.communicate()
-    assert stdout.decode('utf-8').strip() == ""
+    if stdout.decode('utf-8').strip() != "":
+        print(stdout.decode('utf-8').strip(), file=sys.stderr)
+        raise IOError("The intronic and exonic combined don't match the genic regions")
     os.remove(temp_file)
 
     # now generate a bed file of the noncoding regions
@@ -496,6 +454,7 @@ def main():
     runner(run_this)
     assert os.path.exists(noncoding_bed)
 
+    print("calculating genome stats")
     #calculate % of the genome stats
     run_this = """awk '{{sum = sum + $2}} END{{print(sum)}}' {}""".format(whole_genome_coords)
     whole_genome_size = int(runner_w_output(run_this))
@@ -511,6 +470,7 @@ def main():
     noncoding_size = int(runner_w_output(run_this))
 
     genome_stats = "{}_genome_stats.txt".format(out_prefix)
+    print("printing genome stats to {}".format(genome_stats))
     outfile = open(genome_stats, "w")
     for writehere in [sys.stdout, outfile]:
         print("# whole_genome_size: {}".format(whole_genome_size),
@@ -539,25 +499,22 @@ def main():
         print("intergenic_exonic_intronic\t{}\t{:.4f}".format(
               intergenic_exonic_intronic,
               (intergenic_exonic_intronic/whole_genome_size)*100), file = writehere)
-
     outfile.close()
 
     print("now finding transcripts located within the introns of other transcripts")
     # THIS PART FINDS TRANSCRIPTS that are contained within transcripts
     # This part generates the intron regions
-    df  = gff_to_introns(gff_file)
-    df2 = df_to_995p(df)
-    with open("{}_custom_introns.bed".format(out_prefix), "w") as f:
-        print_df_to_bed(df2, f)
+    intron_df = intron_bed_to_995p(intronic_bed)
 
     # This part looks in the GFF and the introns, and finds the ones that
     # have 95% within an intron, and antisense.
     # first get the genes
     transcript_df = gff_to_spliced_transcripts_df(gff_file)
     tx_df_ss = transcript_98per_start_stop(transcript_df)
+    #print(tx_df_ss)
 
     # now get the pairs of transcripts
-    antisense_pairs, sense_pairs = find_antisense_spliced_in_intron(df2, tx_df_ss)
+    antisense_pairs, sense_pairs = find_antisense_spliced_in_intron(exon_ranges, tx_df_ss)
     with open("{}_antisense_spliced_in_intron_pairs.txt".format(out_prefix), "w") as f:
         for entry in antisense_pairs:
             print("{}\t{}".format(
