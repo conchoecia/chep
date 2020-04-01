@@ -1,7 +1,9 @@
-"""
+import os
+docstring=r"""
 This is a snakefile. It calculates the SNP heterozygosity of a whole genome,
   as well as the heterozygosities of the exons, genic regions, introns,
   and intergenic regions.
+
 Using a VCF file, it also calculates elements of the indel heterozygosity:
   - Per-region indel rate
   - Per-geion SNP rate
@@ -32,7 +34,11 @@ Required python packages
   - matplotlib
   - pandas
 """
-import os
+
+if "help" in config:
+    print(docstring)
+    os._exit(0)
+
 import pandas as pd
 
 def get_number_from_file(filepath):
@@ -42,15 +48,16 @@ def get_number_from_file(filepath):
             if line:
                 return(int(line))
 
-# get all the chromosomes
-chroms = []
-if not os.path.exists(config["REF"]):
-    raise IOError("{} does not exist".format(config["REF"]))
-with open(config["REF"], "r") as f:
-    for line in f:
-        line = line.strip()
-        if line[0] == '>':
-            chroms.append(line[1::].split()[0])
+if "REF" in config:
+    # get all the chromosomes
+    chroms = []
+    if not os.path.exists(config["REF"]):
+        raise IOError("{} does not exist".format(config["REF"]))
+    with open(config["REF"], "r") as f:
+        for line in f:
+            line = line.strip()
+            if line[0] == '>':
+                chroms.append(line[1::].split()[0])
 
 rule all:
     input:
@@ -112,6 +119,11 @@ rule all:
 
 region_palette = palette={"whole_genome": "#000000", "exonic": "#3a8ac1",
                           "intergenic": "#d1bb3a", "intronic": "#981e48"}
+
+
+rule print_help:
+    run:
+        print(__doc__)
 
 rule index_the_bam_file:
     input:
