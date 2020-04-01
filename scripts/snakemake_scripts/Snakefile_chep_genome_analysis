@@ -207,8 +207,19 @@ rule gzipped_diploid_vcf:
     threads: 1
     shell:
         """
-        cat {input.vcf} | grep '#' > temp.vcf
-        cat {input.vcf} | grep -v '#' | awk '$5 !~ ","' >> temp.vcf
+        CATTYPE="cat"
+        if [ ${file: -3} == ".gz" ]
+        then
+            CATTYPE="zcat"
+        else if [ ${file: -4} == ".vcf" ]
+        then
+            CATTYPE="cat"
+        else
+            echo "vcf file must be .vcf or .gz"
+            exit 1;
+        fi
+        ${CATTYPE} {input.vcf} | grep '##' > temp.vcf
+        ${CATTYPE} {input.vcf} | grep -v '##' | awk '$5 !~ ","' >> temp.vcf
         bgzip -c temp.vcf > {output.gz}
         tabix -p vcf {output.gz}
         rm temp.vcf
