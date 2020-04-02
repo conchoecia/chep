@@ -39,7 +39,13 @@ if "help" in config:
     print(docstring)
     os._exit(0)
 
+if 999999999 not in config["WINDOWS"]:
+    config["WINDOWS"].append(999999999)
+
+bamstem = config["BAM"].split("/")[-1].replace(".bam", "")
+
 import pandas as pd
+from Bio import SeqIO
 
 def get_number_from_file(filepath):
     with open(filepath, "r") as f:
@@ -48,46 +54,54 @@ def get_number_from_file(filepath):
             if line:
                 return(int(line))
 
+if "MINCHROMLEN" not in config:
+    config["MINCHROMLEN"] = 100000
 if "REF" in config:
     # get all the chromosomes
-    chroms = []
+    chroms = {}
     if not os.path.exists(config["REF"]):
         raise IOError("{} does not exist".format(config["REF"]))
-    with open(config["REF"], "r") as f:
-        for line in f:
-            line = line.strip()
-            if line[0] == '>':
-                chroms.append(line[1::].split()[0])
+    with open(config["REF"], "rU") as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            if len(record.seq) >= config["MINCHROMLEN"]:
+                key ="".join([x for x in str(record.id) if x not in ["_", ".",
+                  ",", "!", "#", "$", "%", "^", "&", "(", ")", "-", "+", "~",
+                  "`", "@", "*", "{", "}", "|", "\\", ":", ";", "'", "\"",
+                  "<", ">", "/", "?"]])
+                if key in chroms:
+                    raise IOError("This sequence's ID clashes with other in fasta: {}, {}".format(record.id, chroms[key]))
+                chroms[key] = str(record.id)
+
 
 rule all:
     input:
         # get all the bed files
         expand("het_output/bed/{prefix}_{region}.bed", prefix=config["PREFIX"],
-               region = ["whole_genome", "exonic", "genic",
+               region = ["wholeGenome", "exonic", "genic",
                          "intergenic", "intronic", "noncoding"]),
         # pileup tables
         expand("het_output/pileup_tables/{prefix}_{region}_pileup_table.txt",
-               prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                          "intergenic", "intronic", "noncoding"]),
         # make the plots
         expand("het_output/plots/{prefix}_{region}_marginal_het_het_plot.pdf",
-               prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"]),
         expand("het_output/plots/{prefix}_{region}_het_by_position.tsv",
-               prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"]),
         #get a diploid, gzipped vcf file
         expand("het_output/vcf/{prefix}_diploid.vcf.gz", prefix=config["PREFIX"]),
         # get the region snp and indel counts
         # make a table of the indel spectrum - makes a plot of size dist per region and a simple boxplot
         expand("het_output/counts/snp_by_region/{prefix}_{region}_snp_count.txt",
-               prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"]),
         expand("het_output/counts/indel_spec_by_region/{prefix}_{region}_indel_spec.txt",
-               prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"]),
         expand("het_output/counts/indel_by_region/{prefix}_{region}_indel_count.txt",
-               prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"]),
         expand("het_output/counts/indel_spec_by_region/{prefix}_all_indel_spec.txt", prefix=config["PREFIX"]),
         expand("het_output/plots/{prefix}_all_indel_spec.pdf", prefix=config["PREFIX"]),
@@ -96,28 +110,28 @@ rule all:
 
         # now do the analyses over windows
         expand("het_output/window/merged/{prefix}_w{window}_{region}_all_het.tsv",
-               prefix=config["PREFIX"], window=WINDOWS,
+               prefix=config["PREFIX"], window=config["WINDOWS"],
                region = ["exonic", "genic", "intergenic", "intronic", "noncoding"]),
         expand("het_output/counts/tables/by_chr/{prefix}_indel_SNP_by_{region}.txt",
                prefix=config["PREFIX"], region = ["exonic", "genic", "intergenic", "intronic", "noncoding"]),
         expand("het_output/counts/tables/window/{prefix}_w{window}_VCF_indel_snp_rates_{region}.txt",
-               window=WINDOWS, prefix=config["PREFIX"],
+               window=config["WINDOWS"], prefix=config["PREFIX"],
                region = ["exonic", "genic", "intergenic", "intronic", "noncoding"]),
         expand("het_output/final_output/tables/{prefix}_w{window}_indel_snp.tsv",
-               window=WINDOWS, prefix=config["PREFIX"]),
+               window=config["WINDOWS"], prefix=config["PREFIX"]),
 
         # final PDF plots
-        expand("het_output/final_output/pdf/pairplot/{prefix}_w{window}_pairplot.pdf", window=WINDOWS, prefix=config["PREFIX"]),
+        expand("het_output/final_output/pdf/pairplot/{prefix}_w{window}_pairplot.pdf", window=config["WINDOWS"], prefix=config["PREFIX"]),
         expand("het_output/final_output/pdf/{prefix}_depth_histo_plot.pdf", prefix=config["PREFIX"]),
         expand("het_output/final_output/pdf/{prefix}_depth_histo_plot_single.pdf", prefix=config["PREFIX"]),
         expand("het_output/final_output/pdf/snp_vs_indel/{prefix}_w{window}_snpvindel.pdf",
-               window=WINDOWS, prefix=config["PREFIX"]),
+               window=config["WINDOWS"], prefix=config["PREFIX"]),
         expand("het_output/final_output/pdf/snp_vs_indel/{prefix}_w{window}_snpvindel_labels.pdf",
-               window=WINDOWS, prefix=config["PREFIX"]),
+               window=config["WINDOWS"], prefix=config["PREFIX"]),
         expand("het_output/final_output/pdf/chrom_pos_value/{prefix}_w{window}_chrom_pos_value.pdf",
-               window=[x for x in WINDOWS if x != 999999999], prefix=config["PREFIX"])
+               window=[x for x in config["WINDOWS"] if x != 999999999], prefix=config["PREFIX"])
 
-region_palette = palette={"whole_genome": "#000000", "exonic": "#3a8ac1",
+region_palette = palette={"wholeGenome": "#000000", "exonic": "#3a8ac1",
                           "intergenic": "#d1bb3a", "intronic": "#981e48"}
 
 
@@ -146,9 +160,9 @@ rule get_bed_files:
         intergenic   = "het_output/bed/{prefix}_intergenic.bed",
         intronic     = "het_output/bed/{prefix}_intronic.bed",
         noncoding    = "het_output/bed/{prefix}_noncoding.bed",
-        whole_genome = "het_output/bed/{prefix}_whole_genome.bed",
+        wholeGenome  = "het_output/bed/{prefix}_wholeGenome.bed",
         stats        = "het_output/bed/{prefix}_genome_stats.txt",
-        genfile      = "het_output/bed/{prefix}_size_whole_genome.genfile"
+        genfile      = "het_output/bed/{prefix}_size_wholeGenome.genfile"
 
     params:
         prefix = lambda wildcards: wildcards.prefix
@@ -197,7 +211,6 @@ rule plot_results:
         """
 # CHEP RESULTS STOP
 
-
 rule gzipped_diploid_vcf:
     input:
         vcf = config["VCF"]
@@ -208,18 +221,21 @@ rule gzipped_diploid_vcf:
     shell:
         """
         CATTYPE="cat"
-        if [ ${file: -3} == ".gz" ]
+        if [[ {input.vcf} =~ \.gz$ ]];
         then
             CATTYPE="zcat"
-        else if [ ${file: -4} == ".vcf" ]
+            echo "inside gz CATTYPE is ${{CATTYPE}}"
+        elif [[ {input.vcf} = \.vcf$ ]];
         then
             CATTYPE="cat"
+            echo "inside vcf CATTYPE is ${{CATTYPE}}"
         else
             echo "vcf file must be .vcf or .gz"
-            exit 1;
+            exit 1
         fi
-        ${CATTYPE} {input.vcf} | grep '##' > temp.vcf
-        ${CATTYPE} {input.vcf} | grep -v '##' | awk '$5 !~ ","' >> temp.vcf
+        echo "CATTYPE is ${{CATTYPE}}"
+        ${{CATTYPE}} {input.vcf} | grep '##' > temp.vcf
+        ${{CATTYPE}} {input.vcf} | grep -v '##' | awk '$5 !~ ","' >> temp.vcf
         bgzip -c temp.vcf > {output.gz}
         tabix -p vcf {output.gz}
         rm temp.vcf
@@ -241,7 +257,7 @@ rule calc_indel_raw_for_region:
     threads: 1
     shell:
         """
-        tabix -R {input.bed} {input.gz} | \
+        tabix -R {input.gz} {input.bed} | \
           awk 'function abs(x){{return ((x < 0.0) ? -x : x)}} \
                {{print(abs(length($5)-length($4)))}}' | \
           grep -v '0' > {output.table}
@@ -286,14 +302,14 @@ rule calc_snp_number_for_region:
     """
     input:
         bed = "het_output/bed/{prefix}_{region}.bed",
-        gz =  "het_output/vcf/{prefix}_diploid.vcf.gz",
+        dipvcfgz =  "het_output/vcf/{prefix}_diploid.vcf.gz",
         tbi = "het_output/vcf/{prefix}_diploid.vcf.gz.tbi"
     output:
          table = "het_output/counts/snp_by_region/{prefix}_{region}_snp_count.txt"
     threads: 1
     shell:
         """
-        tabix -R {input.bed} {input.gz} | \
+        tabix -R {input.bed} {input.dipvcfgz} | \
           awk '{{if (length($4) == length($5)){{print($0)}}}}' | wc -l > {output.table}
         """
 
@@ -308,23 +324,23 @@ rule indel_spectrum_to_joint_spectrum:
     input:
         stats = "het_output/bed/{prefix}_genome_stats.txt",
         tables = expand("het_output/counts/indel_spec_by_region/{prefix}_{region}_indel_spec.txt",               
-                 prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+                 prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"])
     output:
         table = "het_output/counts/indel_spec_by_region/{prefix}_all_indel_spec.txt"
     params:
         prefix = lambda wildcards: wildcards.prefix,
-        regions = ["whole_genome", "exonic", "genic",
+        regions = ["wholeGenome", "exonic", "genic",
                    "intergenic", "intronic", "noncoding"]
     threads: 1
     run:
         region_to_num_bases = {}
-        whole_genome_size = 0
+        wholeGenome_size = 0
         with open(input.stats, "r") as f:
             for line in f:
                 line = line.strip()
                 if line[0] == '#':
-                    whole_genome_size = int(line.split(":")[1])
+                    wholeGenome_size = int(line.split(":")[1])
                 else:
                     splitd = line.split()
                     if splitd[0] != "region" and splitd[0] in params.regions:
@@ -405,7 +421,7 @@ rule plot_indel_size_distribution:
     """
     input:
          table = expand("het_output/counts/indel_raw_by_region/{prefix}_{region}_indel_raw.txt",
-                 prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+                 prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"])
     output:
         pdf = "het_output/plots/{prefix}_indel_size_distribution.pdf"
@@ -431,7 +447,7 @@ rule plot_indel_size_distribution:
         matplotlib.rcParams['ps.fonttype'] = 42
 
         cols = ["exonic", "intergenic", "intronic"]
-        #cols = ["exonic", "intergenic", "intronic", "genic", "noncoding", "whole_genome"]
+        #cols = ["exonic", "intergenic", "intronic", "genic", "noncoding", "wholeGenome"]
 
         observations = []
         kind = []
@@ -464,13 +480,13 @@ rule table_of_indel_and_SNP_rates:
     """
     input:
         snp    = expand("het_output/counts/snp_by_region/{prefix}_{region}_snp_count.txt",
-                 prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+                 prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"]),
         indel  = expand("het_output/counts/indel_by_region/{prefix}_{region}_indel_count.txt",
-                 prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+                 prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"]),
         tables = expand("het_output/pileup_tables/{prefix}_{region}_pileup_table.txt",
-                 prefix=config["PREFIX"], region = ["whole_genome", "exonic", "genic",
+                 prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
                                         "intergenic", "intronic", "noncoding"]),
         stats  = "het_output/bed/{prefix}_genome_stats.txt",
     output:
@@ -478,27 +494,27 @@ rule table_of_indel_and_SNP_rates:
     params:
         prefix = lambda wildcards: wildcards.prefix,
         depth = config["HAPDEPTH"],
-        regions = ["whole_genome", "exonic", "genic",
+        regions = ["wholeGenome", "exonic", "genic",
                    "intergenic", "intronic", "noncoding"]
     threads: 1
     run:
         import pandas as pd
         #pd.set_option('display.float_format', lambda x: '%.9f' % x)
         region_info = {}
-        whole_genome_size = 0
+        wholeGenome_size = 0
         with open(input.stats, "r") as f:
             for line in f:
                 line = line.strip()
                 if line:
                     if line[0] == '#':
-                        whole_genome_size = int(line.split(":")[1])
+                        wholeGenome_size = int(line.split(":")[1])
                     else:
                         splitd = line.split()
                         if splitd[0] != "region" and splitd[0] in params.regions:
                             thisregion = splitd[0]
                             region_size = int(splitd[1])
                             region_info[thisregion] = {"region_size": region_size}
-        region_info["whole_genome"] = {"region_size": whole_genome_size}
+        region_info["wholeGenome"] = {"region_size": wholeGenome_size}
 
         # add the snp info
         for this_region in params.regions:
@@ -528,13 +544,14 @@ rule split_the_bam_files:
         bam = config["BAM"],
         bai = "{}.bai".format(config["BAM"])
     output:
-        bam = expand("bams/reads_to_ref_{{prefix}}.sorted.{{prefix}}{chrom}.bam", chrom=chroms)
-    threads: 1
+        bam = "bams/{prefix}_{chrom}.bam"
+    threads: workflow.cores * 0.25
     params:
-        prefix = lambda wildcards: wildcards.prefix,
+        chromreal = lambda wildcards: chroms[wildcards.chrom]
     shell:
         """
-        bamtools split -refPrefix {params.prefix} -in {input.bam} -reference
+        samtools view -hb -@ {threads} {input.bam} {params.chromreal} | \
+          samtools sort -@ {threads} - > {output.bam}
         """
 
 rule per_windowed_het:
@@ -544,14 +561,14 @@ rule per_windowed_het:
     input:
         ref = config["REF"],
         bed = "het_output/bed/{prefix}_{region}.bed",
-        bam = "bams/reads_to_ref_{prefix}.sorted.{prefix}{chrom}.bam"
+        bam = "bams/{prefix}_{chrom}.bam"
     output:
         het = "het_output/window/table/window_{window}/{prefix}_{chrom}_{region}_windowed_het.tsv"
     params:
         flank  = config["FLANK"],
         peak   = config["HAPDEPTH"],
         window = lambda wildcards: wildcards.window,
-        chrom = lambda wildcards: wildcards.chrom
+        chrom = lambda wildcards: chroms[wildcards.chrom]
     threads: 1
     shell:
         """
@@ -703,11 +720,11 @@ rule plot_several_read_depth_histograms:
     """
     input:
         hbp = expand("het_output/plots/{{prefix}}_{region}_het_by_position.tsv",
-               region = ["whole_genome", "intronic", "intergenic", "exonic"])
+               region = ["wholeGenome", "intronic", "intergenic", "exonic"])
     output:
         pdf = "het_output/final_output/pdf/{prefix}_depth_histo_plot.pdf"
     params:
-        regions = ["whole_genome", "intronic", "intergenic", "exonic"]
+        regions = ["wholeGenome", "intronic", "intergenic", "exonic"]
     threads: 1
     run:
         import matplotlib
@@ -777,11 +794,11 @@ rule plot_read_depth_histograms_one_area:
     """
     input:
         hbp = expand("het_output/plots/{{prefix}}_{region}_het_by_position.tsv",
-               region = ["whole_genome", "intronic", "intergenic", "exonic"])
+               region = ["wholeGenome", "intronic", "intergenic", "exonic"])
     output:
         pdf = "het_output/final_output/pdf/{prefix}_depth_histo_plot_single.pdf"
     params:
-        regions = ["whole_genome", "intronic", "intergenic", "exonic"]
+        regions = ["wholeGenome", "intronic", "intergenic", "exonic"]
     threads: 1
     run:
         import seaborn as sns; sns.set()
@@ -813,7 +830,7 @@ rule plot_read_depth_histograms_one_area:
             df["region"] = params.regions[i]
             df_list.append(df)
         plot_this = pd.concat(df_list)
-        region_palette = palette={"whole_genome": "#000000", "exonic": "#3a8ac1",
+        region_palette = palette={"wholeGenome": "#000000", "exonic": "#3a8ac1",
                                   "intergenic": "#d1bb3a", "intronic": "#981e48"}
         ax = sns.scatterplot(x="depth", y="totdepth",
                              hue="region",data=plot_this,
@@ -886,7 +903,7 @@ rule plot_chrom_values_windows:
     plots the het rates, vcf, gc, and more along each chromosome
     """
     input:
-        genfile = "het_output/bed/{prefix}_size_whole_genome.genfile",
+        genfile = "het_output/bed/{prefix}_size_wholeGenome.genfile",
         hbp = "het_output/final_output/tables/{prefix}_w{window}_indel_snp.tsv"
     output:
         pdf = "het_output/final_output/pdf/chrom_pos_value/{prefix}_w{window}_chrom_pos_value.pdf",

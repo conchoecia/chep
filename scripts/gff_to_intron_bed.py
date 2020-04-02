@@ -45,9 +45,9 @@ Required Software:
 
 The output is:
   # files related to getting bed files of different genomic regions
-  - prefix_whole_genome.bed
+  - prefix_wholeGenome.bed
     - just a bed file of the whole genome
-  - prefix_whole_genome.genfile
+  - prefix_size_wholeGenome.genfile
     - the bedtools genFile format. Like a bed file, but no start.
   - prefix_exonic.bed
     - The exonic regions
@@ -77,6 +77,7 @@ import sys
 import numpy as np
 import pandas as pd
 import random
+import re
 import string
 import subprocess
 
@@ -242,7 +243,14 @@ def parent_from_gff_comment(commentline):
     """
     takes a comment string from a gff file and returns the parent sequence ID
     """
-    temp = [x for x in commentline.split(";") if x.startswith("Parent=")][0]
+    style = ""
+    temp  = ""
+    if "Parent=" in commentline:
+        temp = [x.strip() for x in commentline.split(";")
+                   if x.strip().startswith("Parent=")][0]
+    elif "transcript_id" in commentline:
+        temp = [x.strip() for x in commentline.split(";")
+                   if x.strip().startswith("transcript_id")][0]
     strip_start = ["rna-" #In hg38 the annotation Parents start with rna- for some reason
                    ]
     for strip_this in strip_start:
@@ -268,7 +276,7 @@ def gff_coding_intervals(gfffile):
         for line in f:
             line=line.strip()
             if line and (line[0] != '#'):
-                splitd = line.split()
+                splitd = re.split(r'\t+', line.rstrip('\t'))
                 if splitd[2] == "exon":
                     chrom = splitd[0]
                     start = int(splitd[3])
@@ -285,8 +293,8 @@ def gff_coding_intervals(gfffile):
                         if stop > ranges[parent]["stop"]:
                             ranges[parent]["stop"] = stop
                         if chrom != ranges[parent]["chrom"]:
-                            print("""You have a gene that spans multiple scaffolds.
-                            This is not good. {}""".format(parent))
+                            print("""You have a transcript that spans multiple scaffolds.
+       This is not good. '{}'""".format(parent))
     return ranges
 
 
@@ -324,7 +332,7 @@ def main():
     gff_file = sys.argv[3]
     if not os.path.exists(gff_file):
         raise OSError("  - The gff file does not exist %s" % gff_file)
-    if os.path.splitext(gff_file)[1] not in [".gff"]:
+    if os.path.splitext(gff_file)[1] not in [".gff", ".gtf"]:
         raise IOError("  - The gff must have the ending '.gff'. It cannot be gzipped.")
     # make sure that all the files in the path exist
     split_paths = out_prefix.split('/')[:-1]
@@ -340,14 +348,14 @@ def main():
                 print ("  - Successfully created the directory %s " % thisdir)
 
     # first generate the bed file of the whole genome
-    whole_genome_bed = "{}_whole_genome.bed".format(out_prefix)
-    whole_genome_coords = "{}_whole_genome.genfile".format(out_prefix)
+    wholeGenome_bed = "{}_wholeGenome.bed".format(out_prefix)
+    wholeGenome_coords = "{}_size_wholeGenome.genfile".format(out_prefix)
     print("Running samtools faidx")
     run_this = "samtools faidx {}".format(reference)
     runner(run_this)
     print("generating whole-genome bed")
     fai = "{}.fai".format(reference)
-    write_here = open(whole_genome_bed, "w")
+    write_here = open(wholeGenome_bed, "w")
     with open(fai, "r") as f:
         for line in f:
             line = line.strip()
@@ -358,11 +366,11 @@ def main():
                        file = write_here)
     write_here.close()
     run_this = """sort -k1,1 -k2,2n {} | cut -f1,3 > {}""".format(
-            whole_genome_bed, whole_genome_coords)
+            wholeGenome_bed, wholeGenome_coords)
     runner(run_this)
 
-    assert os.path.exists(whole_genome_bed)
-    assert os.path.exists(whole_genome_coords)
+    assert os.path.exists(wholeGenome_bed)
+    assert os.path.exists(wholeGenome_coords)
 
     # now generate a bed file of the transcript regions
     print("generating a bed file of genic regions")
@@ -375,7 +383,7 @@ def main():
     print("generating a bed file of intergenic regions")
     intergenic_bed = "{}_intergenic.bed".format(out_prefix)
     run_this = "bedtools complement -i {} -g {} > {}".format(
-        genic_bed, whole_genome_coords, intergenic_bed)
+        genic_bed, wholeGenome_coords, intergenic_bed)
     runner(run_this)
     assert os.path.exists(intergenic_bed)
 
@@ -387,7 +395,7 @@ def main():
                 genic_bed, intergenic_bed, temp_file)
     runner(run_this)
     assert os.path.exists(temp_file)
-    run_this = """diff {} {}""".format(whole_genome_coords, temp_file)
+    run_this = """diff {} {}""".format(wholeGenome_coords, temp_file)
     process = subprocess.Popen(run_this,
                      stdout=subprocess.PIPE,
                      stderr=subprocess.PIPE,
@@ -422,7 +430,7 @@ def main():
     intronic_bed = "{}_intronic.bed".format(out_prefix)
     run_this = """cat {} {} | bedtools sort | bedtools merge | \
                 sort -k1,1 -k2,2n | bedtools complement -i - -g {} > {}""".format(
-        exonic_bed, intergenic_bed, whole_genome_coords, intronic_bed)
+        exonic_bed, intergenic_bed, wholeGenome_coords, intronic_bed)
     runner(run_this)
     assert os.path.exists(intronic_bed)
 
@@ -456,8 +464,8 @@ def main():
 
     print("calculating genome stats")
     #calculate % of the genome stats
-    run_this = """awk '{{sum = sum + $2}} END{{print(sum)}}' {}""".format(whole_genome_coords)
-    whole_genome_size = int(runner_w_output(run_this))
+    run_this = """awk '{{sum = sum + $2}} END{{print(sum)}}' {}""".format(wholeGenome_coords)
+    wholeGenome_size = int(runner_w_output(run_this))
     run_this = """awk '{{sum = sum + $3 - $2 }} END{{print(sum)}}' {}""".format(exonic_bed)
     exonic_size = int(runner_w_output(run_this))
     run_this = """awk '{{sum = sum + $3 - $2 }} END{{print(sum)}}' {}""".format(genic_bed)
@@ -473,32 +481,32 @@ def main():
     print("printing genome stats to {}".format(genome_stats))
     outfile = open(genome_stats, "w")
     for writehere in [sys.stdout, outfile]:
-        print("# whole_genome_size: {}".format(whole_genome_size),
+        print("# wholeGenome_size: {}".format(wholeGenome_size),
               file=writehere)
         print("region\tnum_bases\tpercent_of_total", file = writehere)
         print("exonic\t{}\t{:.4f}".format(
               exonic_size,
-              (exonic_size/whole_genome_size)*100), file = writehere)
+              (exonic_size/wholeGenome_size)*100), file = writehere)
         print("genic\t{}\t{:.4f}".format(
               genic_size,
-              (genic_size/whole_genome_size)*100), file = writehere)
+              (genic_size/wholeGenome_size)*100), file = writehere)
         print("intergenic\t{}\t{:.4f}".format(
               intergenic_size,
-              (intergenic_size/whole_genome_size)*100), file = writehere)
+              (intergenic_size/wholeGenome_size)*100), file = writehere)
         print("intronic\t{}\t{:.4f}".format(
               intronic_size,
-              (intronic_size/whole_genome_size)*100), file = writehere)
+              (intronic_size/wholeGenome_size)*100), file = writehere)
         print("noncoding\t{}\t{:.4f}".format(
               noncoding_size,
-              (noncoding_size/whole_genome_size)*100), file = writehere)
+              (noncoding_size/wholeGenome_size)*100), file = writehere)
         intergenic_genic = intergenic_size + genic_size
         print("intergenic_genic\t{}\t{:.4f}".format(
               intergenic_genic,
-              (intergenic_genic/whole_genome_size)*100), file = writehere)
+              (intergenic_genic/wholeGenome_size)*100), file = writehere)
         intergenic_exonic_intronic = intergenic_size + exonic_size + intronic_size
         print("intergenic_exonic_intronic\t{}\t{:.4f}".format(
               intergenic_exonic_intronic,
-              (intergenic_exonic_intronic/whole_genome_size)*100), file = writehere)
+              (intergenic_exonic_intronic/wholeGenome_size)*100), file = writehere)
     outfile.close()
 
     print("now finding transcripts located within the introns of other transcripts")

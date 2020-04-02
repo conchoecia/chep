@@ -13,7 +13,6 @@ fi
 
 INCONFIG=0
 while (( "$#" )); do
-  echo "$1"
   if [ "$1" == "--help" ]
   then
       snakemake --snakefile "${SNAKEFILE}" --config help=help
@@ -40,4 +39,4 @@ while (( "$#" )); do
 done
 
 echo "Running the command: snakemake --configfile ${CONFIGFILE} --snakefile ${SNAKEFILE} ${ARGSTRING}"
-snakemake --configfile "${CONFIGFILE}" --snakefile "${SNAKEFILE}" "${ARGSTRING}"
+snakemake --configfile "${CONFIGFILE}" --snakefile "${SNAKEFILE}" $(echo "${ARGSTRING}")
