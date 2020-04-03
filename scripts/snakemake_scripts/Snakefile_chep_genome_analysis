@@ -81,34 +81,34 @@ if "REF" in config:
 
 rule all:
     input:
-        ## get all the bed files
-        #expand("het_output/bed/{prefix}_{region}.bed", prefix=config["PREFIX"],
-        #       region = ["wholeGenome", "exonic", "genic",
-        #                 "intergenic", "intronic", "noncoding"]),
-        ## pileup tables
-        #expand("het_output/pileup_tables/{prefix}_{region}_pileup_table.txt",
-        #       prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
-        #                 "intergenic", "intronic", "noncoding"]),
-        ## make the plots
-        #expand("het_output/plots/{prefix}_{region}_marginal_het_het_plot.pdf",
-        #       prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
-        #                                "intergenic", "intronic", "noncoding"]),
-        #expand("het_output/plots/{prefix}_{region}_het_by_position.tsv",
-        #       prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
-        #                                "intergenic", "intronic", "noncoding"]),
-        ##get a diploid, gzipped vcf file
-        #expand("het_output/vcf/{prefix}_diploid.vcf.gz", prefix=config["PREFIX"]),
-        ## get the region snp and indel counts
-        ## make a table of the indel spectrum - makes a plot of size dist per region and a simple boxplot
-        #expand("het_output/counts/snp_by_region/{prefix}_{region}_snp_count.txt",
-        #       prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
-        #                                "intergenic", "intronic", "noncoding"]),
-        #expand("het_output/counts/indel_spec_by_region/{prefix}_{region}_indel_spec.txt",
-        #       prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
-        #                                "intergenic", "intronic", "noncoding"]),
-        #expand("het_output/counts/indel_by_region/{prefix}_{region}_indel_count.txt",
-        #       prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
-        #                                "intergenic", "intronic", "noncoding"]),
+        # get all the bed files
+        expand("het_output/bed/{prefix}_{region}.bed", prefix=config["PREFIX"],
+               region = ["wholeGenome", "exonic", "genic",
+                         "intergenic", "intronic", "noncoding"]),
+        # pileup tables
+        expand("het_output/pileup_tables/{prefix}_{region}_pileup_table.txt",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
+                         "intergenic", "intronic", "noncoding"]),
+        # make the plots
+        expand("het_output/plots/{prefix}_{region}_marginal_het_het_plot.pdf",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
+                                        "intergenic", "intronic", "noncoding"]),
+        expand("het_output/plots/{prefix}_{region}_het_by_position.tsv",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
+                                        "intergenic", "intronic", "noncoding"]),
+        #get a diploid, gzipped vcf file
+        expand("het_output/vcf/{prefix}_diploid.vcf.gz", prefix=config["PREFIX"]),
+        # get the region snp and indel counts
+        # make a table of the indel spectrum - makes a plot of size dist per region and a simple boxplot
+        expand("het_output/counts/snp_by_region/{prefix}_{region}_snp_count.txt",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
+                                        "intergenic", "intronic", "noncoding"]),
+        expand("het_output/counts/indel_spec_by_region/{prefix}_{region}_indel_spec.txt",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
+                                        "intergenic", "intronic", "noncoding"]),
+        expand("het_output/counts/indel_by_region/{prefix}_{region}_indel_count.txt",
+               prefix=config["PREFIX"], region = ["wholeGenome", "exonic", "genic",
+                                        "intergenic", "intronic", "noncoding"]),
         expand("het_output/counts/indel_spec_by_region/{prefix}_all_indel_spec.txt", prefix=config["PREFIX"]),
         expand("het_output/plots/{prefix}_all_indel_spec.pdf", prefix=config["PREFIX"]),
         expand("het_output/plots/{prefix}_indel_size_distribution.pdf", prefix=config["PREFIX"]),
@@ -231,7 +231,7 @@ rule gzipped_diploid_vcf:
         then
             CATTYPE="zcat"
             echo "inside gz CATTYPE is ${{CATTYPE}}"
-        elif [[ {input.vcf} = \.vcf$ ]];
+        elif [[ {input.vcf} =~ \.vcf$ ]];
         then
             CATTYPE="cat"
             echo "inside vcf CATTYPE is ${{CATTYPE}}"
