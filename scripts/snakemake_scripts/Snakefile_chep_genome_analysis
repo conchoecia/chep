@@ -4,6 +4,12 @@ This is a snakefile. It calculates the SNP heterozygosity of a whole genome,
   as well as the heterozygosities of the exons, genic regions, introns,
   and intergenic regions.
 
+Usage:
+ To run the pipeline, give the program chep_genome_analysis at least one argument, like --cores
+  chep_genome_analysis --cores 90 -r -p
+ To start a dry run to check if the pipeline will work, run
+  chep_genome_analysis --cores 90 -r -p -n
+
 Using a VCF file, it also calculates elements of the indel heterozygosity:
   - Per-region indel rate
   - Per-geion SNP rate
@@ -257,7 +263,7 @@ rule calc_indel_raw_for_region:
     threads: 1
     shell:
         """
-        tabix -R {input.gz} {input.bed} | \
+        bedtools intersect -a {input.gz} -b {input.bed} | \
           awk 'function abs(x){{return ((x < 0.0) ? -x : x)}} \
                {{print(abs(length($5)-length($4)))}}' | \
           grep -v '0' > {output.table}
@@ -309,7 +315,7 @@ rule calc_snp_number_for_region:
     threads: 1
     shell:
         """
-        tabix -R {input.bed} {input.dipvcfgz} | \
+        bedtools intersect -a {input.dipvcfgz} -b {input.bed} | \
           awk '{{if (length($4) == length($5)){{print($0)}}}}' | wc -l > {output.table}
         """
 
@@ -608,7 +614,7 @@ rule per_region_indel_snp_table:
     """
     input:
         bed = "het_output/bed/{prefix}_{region}.bed",
-        vcf = config["VCF"]
+        vcf = "het_output/vcf/{prefix}_diploid.vcf.gz",
     output:
         txt = "het_output/counts/tables/by_chr/{prefix}_indel_SNP_by_{region}.txt"
     threads: 1
