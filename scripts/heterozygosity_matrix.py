@@ -337,7 +337,7 @@ def get_genome_size(genome_file):
     if not os.path.exists(genome_file):
         raise IOError("The genome assembly file doesn't exist")
     ending = os.path.splitext(genome_file)[-1]
-    if ending not in [".fasta", ".fa"]:
+    if ending not in [".fasta", ".fa", ".fna"]:
         raise IOError("The genome assembly file must end in .fa or .fasta")
     gsize = 0
     with open(genome_file, "r") as f:

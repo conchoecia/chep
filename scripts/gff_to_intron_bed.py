@@ -332,7 +332,7 @@ def main():
     gff_file = sys.argv[3]
     if not os.path.exists(gff_file):
         raise OSError("  - The gff file does not exist %s" % gff_file)
-    if os.path.splitext(gff_file)[1] not in [".gff", ".gtf"]:
+    if os.path.splitext(gff_file)[1].lower() not in [".gff", ".gtf", ".gff3",]:
         raise IOError("  - The gff must have the ending '.gff'. It cannot be gzipped.")
     # make sure that all the files in the path exist
     split_paths = out_prefix.split('/')[:-1]
