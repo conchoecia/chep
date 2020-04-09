@@ -357,7 +357,7 @@ def main():
     with open(gff_file, "r") as f:
         for line in f:
             line=line.strip()
-            if line:
+            if line and line[0] != '#':
                 seqs_in_gff.add(line.split()[0])
     with open(reference, "r") as f:
         for line in f:
