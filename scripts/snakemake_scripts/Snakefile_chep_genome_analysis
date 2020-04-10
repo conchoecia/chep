@@ -48,6 +48,12 @@ if "help" in config:
 if 999999999 not in config["WINDOWS"]:
     config["WINDOWS"].append(999999999)
 
+# these things will be plotted later
+config["PLOTTHESE"] = ["het", "per_gc", "VCF_per_SNP",
+              "VCF_per_Indel", "transition_div_transversion",
+              "per_indel_bases", "per_deletion_bases","per_insertion_bases",
+               "per_indel_sites", "per_deletion_sites","per_insertion_sites"]
+
 bamstem = config["BAM"].split("/")[-1].replace(".bam", "")
 
 import pandas as pd
@@ -135,7 +141,17 @@ rule all:
         expand("het_output/final_output/pdf/snp_vs_indel/{prefix}_w{window}_snpvindel_labels.pdf",
                window=config["WINDOWS"], prefix=config["PREFIX"]),
         expand("het_output/final_output/pdf/chrom_pos_value/{prefix}_w{window}_chrom_pos_value.pdf",
-               window=[x for x in config["WINDOWS"] if x != 999999999], prefix=config["PREFIX"])
+               window=[x for x in config["WINDOWS"] if x != 999999999], prefix=config["PREFIX"]),
+
+        # make individual 2D plots
+        expand("het_output/final_output/pdf/plots_2D/x-{var1}/y-{var2}/{prefix}_w{window}_x-{var1}-y-{var2}.pdf",
+               window=config["WINDOWS"], prefix=config["PREFIX"],
+               var1=config["PLOTTHESE"], var2=config["PLOTTHESE"]),
+        expand("het_output/final_output/pdf/plots_2D/x-{var1}/y-{var2}/{prefix}_w{window}_x-{var1}-y-{var2}_labels.pdf",
+               window=config["WINDOWS"], prefix=config["PREFIX"],
+               var1=config["PLOTTHESE"], var2=config["PLOTTHESE"])
+
+
 
 region_palette = palette={"wholeGenome": "#000000", "exonic": "#3a8ac1",
                           "intergenic": "#d1bb3a", "intronic": "#981e48"}
@@ -874,8 +890,7 @@ rule plot_indel_vs_het:
 
         df = pd.read_csv(input.hbp, header=0, sep='\t', comment='#')
         df = df.loc[df["region"].isin(["exonic", "intronic", "intergenic"])]
-        df = df.loc[df["chrom"].isin(chroms)]
-        print(df)
+        df = df.loc[df["chrom"].isin(chroms.values())]
 
         for i in range(0,2):
             figWidth = 2.5
@@ -1073,7 +1088,7 @@ rule plot_pairplots:
 
         df = pd.read_csv(input.hbp, header=0, sep='\t', comment='#')
         df = df.loc[df["region"].isin(["exonic", "intronic", "intergenic"])]
-        df = df.loc[df["chrom"].isin(chroms)]
+        df = df.loc[df["chrom"].isin(chroms.values())]
         ax = sns.pairplot(df, hue="region", palette=region_palette,
                           vars=["het", "per_gc",
                                 "VCF_per_SNP", "VCF_per_Indel",
@@ -1082,3 +1097,64 @@ rule plot_pairplots:
                                 "per_indel_sites", "per_deletion_sites","per_insertion_sites",
                                 ])
         ax.savefig(output.pdf)
+
+rule plot_all_useful_variables:
+    """
+    makes useful individual 2D plots of the different variables
+    """
+    input:
+        hbp = "het_output/final_output/tables/{prefix}_w{window}_indel_snp.tsv"
+    output:
+        pdf  = "het_output/final_output/pdf/plots_2D/x-{var1}/y-{var2}/{prefix}_w{window}_x-{var1}-y-{var2}.pdf",
+        pdf2 = "het_output/final_output/pdf/plots_2D/x-{var1}/y-{var2}/{prefix}_w{window}_x-{var1}-y-{var2}_labels.pdf"
+    params:
+        var1 = lambda wildcards: wildcards.var1,
+        var2 = lambda wildcards: wildcards.var2,
+    threads: 1
+    run:
+        import seaborn as sns; sns.set()
+        import matplotlib
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import StrMethodFormatter, NullFormatter
+        sns.set_style("ticks", {'font.family': ['sans-serif'],
+                                    'font.sans-serif': ['Helvetica'],
+                                    'grid.color': '.95'})
+        # Preserve the vertical order of embedded images:
+        matplotlib.rcParams['image.composite_image'] = False
+        matplotlib.rcParams['pdf.fonttype'] = 42
+        matplotlib.rcParams['ps.fonttype'] = 42
+
+        df = pd.read_csv(input.hbp, header=0, sep='\t', comment='#')
+        df = df.loc[df["region"].isin(["exonic", "intronic", "intergenic"])]
+        df = df.loc[df["chrom"].isin(chroms)]
+        print(df)
+
+        for i in range(0,2):
+            figWidth = 2.5
+            figHeight = 2.5
+            xaxis = params.var1
+            yaxis = params.var2
+            fig = plt.figure(figsize=(figWidth,figHeight))
+            ax = sns.scatterplot(x=xaxis, y=yaxis,
+                                 hue="region",data=df,
+                                 alpha=0.5, edgecolor="none",
+                                 palette=region_palette, legend =False)
+            #ymin = max(min(df[yaxis])*0.8, 0)
+            #ymax = max(df[yaxis]*1.1)
+            #ax.set(ylim=(ymin, ymax))
+            #xmin = min(df[xaxis])*0.6
+            #xmax = max(df[xaxis]*1.1)
+            #ax.set(xlim=(xmin, xmax))
+
+            if i == 1:
+                ymin, ymax = ax.get_ylim()
+                color="#3498db" # choose a color
+                bonus = (ymax - ymin) / 50 # still hard coded bonus but scales with the data
+                #pdf 2 is just the version that has each chromosome labelled
+                for x, y, name in zip(df[xaxis], df[yaxis], df["chrom"]):
+                    ax.text(x, y + bonus, name, color="black", size=6)
+                #fig = ax.get_figure()
+                fig.savefig(output.pdf2)
+            else:
+                # pdf1 is the plot without labels
+                fig.savefig(output.pdf)
