@@ -251,11 +251,18 @@ def parent_from_gff_comment(commentline):
     elif "transcript_id" in commentline:
         temp = [x.strip() for x in commentline.split(";")
                    if x.strip().startswith("transcript_id")][0]
-    strip_start = ["rna-" #In hg38 the annotation Parents start with rna- for some reason
-                   ]
+    # this is the penultimate last-ditch effort to try to get the
+    elif "ID=" in commentline:
+        temp = [x.strip() for x in commentline.split(";")
+                   if x.strip().startswith("ID=")][0]
+    # More conditions might need to be added later on.
+    strip_start = ["rna-", #In hg38 the annotation Parents start with rna-
+                   "braker1_"]
     for strip_this in strip_start:
         if temp.startswith(strip_this):
             temp = temp.replace(strip_this,"")
+    if temp == "":
+        raise IOError("This gene's parent was returned as \"\". : {}".format(commentline))
     return temp
 
 def randomString(stringLength=10):
@@ -550,6 +557,7 @@ def main():
     # have 95% within an intron, and antisense.
     # first get the genes
     transcript_df = gff_to_spliced_transcripts_df(gff_file)
+    transcript_df = transcript_df.dropna(how="all")
     tx_df_ss = transcript_98per_start_stop(transcript_df)
     #print(tx_df_ss)
 
