@@ -26,7 +26,7 @@ Vars process_cl_args(int argc, char **argv){
   int c;
   // args
   vars.min=0;
-  vars.max=500;
+  vars.max=1000;
   while( (c=getopt( argc, argv, "dm:M:h" )) != -1 ) {
     switch(c) {
     case 'd' :
