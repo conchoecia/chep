@@ -64,12 +64,6 @@ The output is:
   # files related to finding transcripts contained in introns
   - prefix_custom_introns.bed
     - introns with special cutoffs to remove the longest of introns
-  - prefix_sense_spliced_in_intron_pairs.txt
-    - genes that are contained in introns that are the same sense as the intron
-    - 98% of the gene must be in a single intron
-  - prefix_antisense_spliced_in_intron_pairs.txt
-    - genes that are contained in introns that are antisense to the intron
-    - 98% of the gene must be in a single intron
 """
 
 import os
@@ -547,33 +541,6 @@ def main():
               intergenic_exonic_intronic,
               (intergenic_exonic_intronic/wholeGenome_size)*100), file = writehere)
     outfile.close()
-
-    print("now finding transcripts located within the introns of other transcripts")
-    # THIS PART FINDS TRANSCRIPTS that are contained within transcripts
-    # This part generates the intron regions
-    intron_df = intron_bed_to_995p(intronic_bed)
-
-    # This part looks in the GFF and the introns, and finds the ones that
-    # have 95% within an intron, and antisense.
-    # first get the genes
-    transcript_df = gff_to_spliced_transcripts_df(gff_file)
-    transcript_df = transcript_df.dropna(how="all")
-    tx_df_ss = transcript_98per_start_stop(transcript_df)
-    #print(tx_df_ss)
-
-    # now get the pairs of transcripts
-    antisense_pairs, sense_pairs = find_antisense_spliced_in_intron(exon_ranges, tx_df_ss)
-    with open("{}_antisense_spliced_in_intron_pairs.txt".format(out_prefix), "w") as f:
-        for entry in antisense_pairs:
-            print("{}\t{}".format(
-                entry[0],
-                entry[1]), file = f)
-
-    with open("{}_sense_spliced_in_intron_pairs.txt".format(out_prefix), "w") as f:
-        for entry in sense_pairs:
-            print("{}\t{}".format(
-                entry[0],
-                entry[1]), file = f)
 
 if __name__ == "__main__":
     main()
