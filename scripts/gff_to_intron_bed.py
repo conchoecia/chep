@@ -710,9 +710,12 @@ def main():
             single_exon_sense_genelist = list(single_exon_sense_df["gene"].unique())
             single_exon_sense_bp = num_exon_bases_in_genelist(gff_file, single_exon_sense_genelist)
         else:
-            bp_sense_exons     = 0
-            bp_antisense_exons = 0
-            bp_all_exons       = 0
+            bp_sense_exons                 = 0
+            bp_antisense_exons             = 0
+            bp_all_exons                   = 0
+            bp_breaks_splicing             = 0
+            doesnt_break_splicing_genes_bp = 0
+            single_exon_sense_bp           = 0
 
         genome_stats = "{}_genome_stats_{}.txt".format(out_prefix, intron_filter)
         print("    - Printing genome stats to {}".format(genome_stats), file=sys.stderr)
