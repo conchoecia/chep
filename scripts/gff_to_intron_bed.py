@@ -101,9 +101,9 @@ def print_help():
     print(__doc__)
     sys.exit()
 
-def df_to_999p(df):
+def df_to_998p(df):
     """
-    this removes the introns in the 0.5th largest percentile
+    this removes the introns in the 0.2nd largest percentile
     percentile   length
     99.1          13396
     99.2          14470
@@ -116,16 +116,44 @@ def df_to_999p(df):
     99.9          68541
     """
     df["length"] = df["stop"] - df["start"] + 1
-    filter_cutoff = int(np.percentile(df["length"], 99.9))
+    filter_cutoff = int(np.percentile(df["length"], 99.8))
     return df.loc[df["length"] <= filter_cutoff, ]
 
-def transcript_95per_start_stop(df):
+def _transcript_90per_startnew_helper(row):
     """
-    This trims off 2.5% of the start and stop
+    helper function to give some wiggle room to find genes
+    """
+    # Forward strand. Only allow a 5% off 5'UTR
+    if row["strand"] == "+":
+        return row["start"] + (row["length"] * 0.05) - 1
+    # Reverse strand. OK to allow 15% off the 3'UTR
+    elif row["strand"] == "-":
+        return row["start"] + (row["length"] * 0.15) - 1
+    # can't decide. just take off 5%
+    else:
+        return row["start"] + (row["length"] * 0.05) - 1
+
+def _transcript_90per_stopnew_helper(row):
+    """
+    helper function to give some wiggle room to find genes
+    """
+    # Forward strand. Ok to take 15% off the stop
+    if row["strand"] == "+":
+        return row["stop"]   - (row["length"] * 0.15) + 1
+    # Reverse strand, ok to take 5% off the 5' UTR
+    elif row["strand"] == "-":
+        return row["stop"]   - (row["length"] * 0.05) + 1
+    # Otherwise, just take off 5%
+    else:
+        return row["stop"]   - (row["length"] * 0.05) + 1
+
+def transcript_90per_start_stop(df):
+    """
+    This trims off 5% of the start and stop, each
     """
     df["length"] = df["stop"] - df["start"] + 1
-    df["start_new"] = df["start"] + (df["length"] * 0.025) - 1
-    df["stop_new"] = df["stop"]   - (df["length"] * 0.025) + 1
+    df["start_new"] = df.apply(lambda row: _transcript_90per_startnew_helper(row), axis=1)
+    df["stop_new"]  = df.apply(lambda row: _transcript_90per_stopnew_helper(row), axis=1)
     return df
 
 def find_gene_in_intron(intron_df, tx_df):
@@ -191,7 +219,7 @@ def randomString(stringLength=10):
     letters = string.ascii_lowercase
     return ''.join(random.choice(letters) for i in range(stringLength))
 
-def num_exon_bases_in_genelist(gfffile, gene_list):
+def num_exon_bases_in_genelist(gfffile, gene_list, outfile=""):
     """
     takes a gff file, and a list of genes.
     This returns the number of bases in exons that those genes occupy.
@@ -242,7 +270,10 @@ def num_exon_bases_in_genelist(gfffile, gene_list):
         exon_df.columns = ["chrom", "start", "stop"]
         exon_bp = int(np.sum(exon_df["stop"] - exon_df["start"] + 1))
         os.remove(temp_bed)
-        os.remove(temp_bed2)
+        if outfile != "":
+            os.rename(temp_bed2, outfile)
+        else:
+            os.remove(temp_bed2)
         return exon_bp
 
 def gff_coding_intervals(gfffile):
@@ -649,12 +680,12 @@ def main():
     assert os.path.exists(introns_file)
 
     print("  - Clipping off a few percent of the ends of exons for tolerance", file = sys.stderr)
-    tx_df_ss = transcript_95per_start_stop(raw_tx_df)
+    tx_df_ss = transcript_90per_start_stop(raw_tx_df)
 
     for intron_filter in ["noIFilt", "iFilt"]:
         if intron_filter == "iFilt":
-            print("  - Getting rid of the 0.1% largest introns. These are often splice-lead variants, misannotations.", file =sys.stderr)
-            introns_df = df_to_999p(introns_df)
+            print("  - Getting rid of the 0.1% largest introns. These are often spliced leader variants, misannotations.", file =sys.stderr)
+            introns_df = df_to_998p(introns_df)
         else:
             print("  - Running without filtering introns", file =sys.stderr)
 
@@ -699,12 +730,14 @@ def main():
             sense_df = df_genes_in_introns.loc[df_genes_in_introns["sense_anti"] == "sense",]
             breaks_splicing_df = sense_df.loc[sense_df["num_exons"] > 1, ]
             breaks_splicing_genelist = list(breaks_splicing_df["gene"].unique())
-            bp_breaks_splicing = num_exon_bases_in_genelist(gff_file, breaks_splicing_genelist)
+            breaks_splicing_bed = "{}_breaks_splicing_bed_{}.bed".format(out_prefix, intron_filter)
+            bp_breaks_splicing = num_exon_bases_in_genelist(gff_file, breaks_splicing_genelist, breaks_splicing_bed)
 
             # now get in-intron genes that don't break splicing
             doesnt_break_splicing_df = df_genes_in_introns[~df_genes_in_introns.index.isin(breaks_splicing_df.index)]
             doesnt_break_splicing_genes = list(doesnt_break_splicing_df["gene"].unique())
-            doesnt_break_splicing_genes_bp = num_exon_bases_in_genelist(gff_file, doesnt_break_splicing_genes)
+            doesnt_break_splicing_bed = "{}_doesnt_break_splicing_bed_{}.bed".format(out_prefix, intron_filter)
+            doesnt_break_splicing_genes_bp = num_exon_bases_in_genelist(gff_file, doesnt_break_splicing_genes, doesnt_break_splicing_bed)
             # now get the num bp of single sense exons
             single_exon_sense_df = sense_df.loc[sense_df["num_exons"] == 1, ]
             single_exon_sense_genelist = list(single_exon_sense_df["gene"].unique())
