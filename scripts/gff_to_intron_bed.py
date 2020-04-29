@@ -720,7 +720,7 @@ def main():
         genome_stats = "{}_genome_stats_{}.txt".format(out_prefix, intron_filter)
         print("    - Printing genome stats to {}".format(genome_stats), file=sys.stderr)
         outfile = open(genome_stats, "w")
-        for writehere in [sys.stdout, outfile]:
+        for writehere in [sys.stderr, outfile]:
             print("# wholeGenome_size: {}".format(wholeGenome_size),
                   file=writehere)
             print("region\tnum_bases\tpercent_of_total", file = writehere)
