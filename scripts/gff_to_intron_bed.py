@@ -756,15 +756,25 @@ def main():
             print("num_antisense_and_sense_exon_in_intron_bp\t{}\t{:.4f}\t(This is the percent of the exonic size)".format(
                   bp_all_exons,
                   (bp_all_exons/exonic_size)*100), file = writehere)
-            print("num_exonic_bp_breaks_splicing\t{}\t{:.4f}\t(This is the percent of the exonic-inside-intron bp)".format(
-                  bp_breaks_splicing,
-                  (bp_breaks_splicing/bp_all_exons)*100), file= writehere)
-            print("num_exonic_bp_doesnt_break_splicing\t{}\t{:.4f}\t(This is the percent of the exonic-inside-intron bp)".format(
-                  doesnt_break_splicing_genes_bp,
-                  (doesnt_break_splicing_genes_bp/bp_all_exons)*100), file= writehere)
-            print("single_exon_sense_bp\t{}\t{:.4f}\t(This is the percent of the total sense exonic bp)".format(
-                single_exon_sense_bp,
-                (single_exon_sense_bp/bp_sense_exons)*100), file= writehere)
+            if bp_all_exons == 0:
+                print("num_exonic_bp_breaks_splicing\t{}\tNaN\t(This is the percent of the exonic-inside-intron bp)".format(
+                      bp_breaks_splicing), file= writehere)
+                print("num_exonic_bp_doesnt_break_splicing\t{}\tNaN\t(This is the percent of the exonic-inside-intron bp)".format(
+                      doesnt_break_splicing_genes_bp), file= writehere)
+            else:
+                print("num_exonic_bp_breaks_splicing\t{}\t{:.4f}\t(This is the percent of the exonic-inside-intron bp)".format(
+                      bp_breaks_splicing,
+                      (bp_breaks_splicing/bp_all_exons)*100), file= writehere)
+                print("num_exonic_bp_doesnt_break_splicing\t{}\t{:.4f}\t(This is the percent of the exonic-inside-intron bp)".format(
+                      doesnt_break_splicing_genes_bp,
+                      (doesnt_break_splicing_genes_bp/bp_all_exons)*100), file= writehere)
+            if bp_sense_exons == 0:
+                print("single_exon_sense_bp\t{}\tNaN\t(This is the percent of the total sense exonic bp)".format(
+                    single_exon_sense_bp), file= writehere)
+            else:
+                print("single_exon_sense_bp\t{}\t{:.4f}\t(This is the percent of the total sense exonic bp)".format(
+                    single_exon_sense_bp,
+                    (single_exon_sense_bp/bp_sense_exons)*100), file= writehere)
         outfile.close()
         # if we had to make a temp fasta, remove it and its index now.
     if ref_gzipped:
