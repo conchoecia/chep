@@ -489,7 +489,7 @@ def main():
     # first generate the bed file of the whole genome
     print("  - Generating whole-genome bed.", file=sys.stderr)
     wholeGenome_bed = "{}_wholeGenome.bed".format(out_prefix)
-    if os.path.exists(reference):
+    if os.path.exists(wholeGenome_bed):
         print("    - Whole-genome bed exists.")
     else:
         write_here = open(wholeGenome_bed, "w")
