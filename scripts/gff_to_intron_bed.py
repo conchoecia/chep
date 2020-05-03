@@ -119,41 +119,29 @@ def df_to_998p(df):
     filter_cutoff = int(np.percentile(df["length"], 99.8))
     return df.loc[df["length"] <= filter_cutoff, ]
 
-def _transcript_90per_startnew_helper(row):
-    """
-    helper function to give some wiggle room to find genes
-    """
-    # Forward strand. Only allow a 5% off 5'UTR
-    if row["strand"] == "+":
-        return row["start"] + (row["length"] * 0.05) - 1
-    # Reverse strand. OK to allow 15% off the 3'UTR
-    elif row["strand"] == "-":
-        return row["start"] + (row["length"] * 0.15) - 1
-    # can't decide. just take off 5%
-    else:
-        return row["start"] + (row["length"] * 0.05) - 1
+#def _transcript_90per_startnew_helper(row):
+#    """
+#    helper function to give some wiggle room to find genes.
+#    Allows 15% of overlap at the 3' ends, but none at the 5' end.
+#      - not allowing 5' wiggle room prevents spliced leader trans splicing genes into the dataset
+#    """
+#    # Forward strand. Don't allow anything off  5'UTR
+#    if row["strand"] == "+":
+#        return row["start"]
+#    # Reverse strand. OK to allow 15% off the 3'UTR
+#    elif row["strand"] == "-":
+#        return row["start"] + (row["length"] * 0.15) - 1
+#    # can't decide. don't do anything. this is conservative
+#    else:
+#        return row["start"]
 
-def _transcript_90per_stopnew_helper(row):
-    """
-    helper function to give some wiggle room to find genes
-    """
-    # Forward strand. Ok to take 15% off the stop
-    if row["strand"] == "+":
-        return row["stop"]   - (row["length"] * 0.15) + 1
-    # Reverse strand, ok to take 5% off the 5' UTR
-    elif row["strand"] == "-":
-        return row["stop"]   - (row["length"] * 0.05) + 1
-    # Otherwise, just take off 5%
-    else:
-        return row["stop"]   - (row["length"] * 0.05) + 1
-
-def transcript_90per_start_stop(df):
+def transcript_85per_start_stop(df):
     """
     This trims off 5% of the start and stop, each
     """
     df["length"] = df["stop"] - df["start"] + 1
-    df["start_new"] = df.apply(lambda row: _transcript_90per_startnew_helper(row), axis=1)
-    df["stop_new"]  = df.apply(lambda row: _transcript_90per_stopnew_helper(row), axis=1)
+    df["start_15"] = df["start"] + (df["length"] * 0.15)
+    df["stop_15"]  = df["stop"] - (df["length"] * 0.15)
     return df
 
 def find_gene_in_intron(intron_df, tx_df):
@@ -163,28 +151,74 @@ def find_gene_in_intron(intron_df, tx_df):
     """
     gene_in_intron_entries = []
     # the goal of this is to find introns that encapsulate the transcript
+    strand_translate = {"+": "-", "-": "+"}
     for index, row in tx_df.iterrows():
-        intron_sub = intron_df.loc[intron_df["chrom"] == row["chrom"],]
-        intron_sub = intron_sub.loc[row["start_new"] >= intron_sub["start"],]
-        intron_sub = intron_sub.loc[row["stop_new"] <= intron_sub["stop"],]
+        qry = "(chrom == \"{}\") and (start <= {}) and (stop >= {})".format(
+               row["chrom"], row["start_15"], row["stop_15"])
+        intron_sub = intron_df.query(qry)
         # if we weren't able to filter down to one
         if intron_sub.shape[0] >= 1 and isinstance(intron_sub, pd.DataFrame):
             for i2, r2 in intron_sub.iterrows():
-                if row["strand"] != r2["strand"]:
-                    sense_anti = "antisense"
-                elif row["strand"] == r2["strand"]:
-                    sense_anti = "sense"
-                gene_in_intron_entries.append(
-                    {"chrom" : row["chrom"],
-                     "gene" : row["seqname"],
-                     "gene_start" : row["start"],
-                     "gene_stop"  : row["stop"],
-                     "surrounding_gene" : r2["seqname"],
-                     "surrounding_start" : r2["start"],
-                     "surrounding_stop"  : r2["stop"],
-                     "sense_anti" : sense_anti,
-                     "num_exons": row["num_exons"]})
+                add_this = False
+                if row["strand"] in ["+", "-"]:
+                    #if the current gene is +, parse for that
+                    if r2["strand"] == row["strand"]:
+                        # current gene (row) and intron (r2) are parallel.
+                        # actual start and stop must be completely within intron
+                        #print("match: {}".format(i2), file=sys.stderr)
+                        #print("r2")
+                        #print(r2)
+                        #print("row")
+                        #print(row)
+                        #print()
+                        #sys.exit()
 
+                        if (r2["start"] < row["start"]) and (row["stop"] < r2["stop"]):
+                            add_this = True
+                        sense_anti = "sense"
+                    elif strand_translate[r2["strand"]] == row["strand"]:
+                        # current gene (row) and intron (r2) are antiparallel.
+                        # actual start and stop must be completely within intron
+                        if row["strand"] == "+":
+                            #5p (row start) must not overlap, the 3' (row stop) end must be 15% less
+                            if (r2["start"] < row["start"]) and (row["stop_15"] < r2["stop"]):
+                                add_this = True
+                        else: # must be "-"
+                            #5p (row stop) must not overlap, the 3' (row start) end must be 15% less
+                            if (r2["start"] < row["start_15"]) and (row["stop"] < r2["stop"]):
+                                add_this = True
+                        sense_anti = "antisense"
+                    elif r2["strand"] == ".":
+                        #most stringent
+                        if (r2["start"] < row["start"]) and (row["stop"] < r2["start"]):
+                            add_this = True
+                        sense_anti = "none"
+                    else:
+                        print("r2 strand translate: {}".format(
+                              strand_translate[r2["strand"]]))
+                        print("r2", file=sys.stderr)
+                        print(r2, file=sys.stderr)
+                        print("row", file=sys.stderr)
+                        print(row, file=sys.stderr)
+                        raise IOError("We don't know what strand this intron is")
+                elif row["strand"] == '.':
+                    if (r2["start"] < row["start"]) and (row["stop"] < r2["start"]):
+                        add_this = True
+                    sense_anti = "none"
+                else:
+                    print(row)
+                    raise IOError("We do not recognize the strand of this gene")
+                if add_this:
+                    gene_in_intron_entries.append(
+                        {"chrom" : row["chrom"],
+                         "gene" : row["seqname"],
+                         "gene_start" : row["start"],
+                         "gene_stop"  : row["stop"],
+                         "surrounding_gene" : r2["seqname"],
+                         "surrounding_start" : r2["start"],
+                         "surrounding_stop"  : r2["stop"],
+                         "sense_anti" : sense_anti,
+                         "num_exons": row["num_exons"]})
     df_gene_in_introns = pd.DataFrame.from_records(gene_in_intron_entries)
     return df_gene_in_introns
 
@@ -219,43 +253,27 @@ def randomString(stringLength=10):
     letters = string.ascii_lowercase
     return ''.join(random.choice(letters) for i in range(stringLength))
 
-def num_exon_bases_in_genelist(gfffile, gene_list, outfile=""):
+def num_exon_bases_in_genelist(parent_to_exons, gene_list, outfile=""):
     """
     takes a gff file, and a list of genes.
     This returns the number of bases in exons that those genes occupy.
     """
-    gzipped = gfffile.endswith(".gz")
-    # these are things that span multiple scaffolds and should be ignored
-
     if len(gene_list) == 0:
         return 0
     else:
-        random_seed = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(25))
-        temp_bed = "{}.temp.bed".format(random_seed)
+        collision = True
+        random_seed = ""
+        temp_bed    = ""
+        while collision:
+            random_seed = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(25))
+            temp_bed = "{}.temp.bed".format(random_seed)
+            if not os.path.exists(temp_bed):
+                collision = False
         temp_bed_handle = open(temp_bed, "w")
-        if gzipped:
-            f = gzip.open(gfffile, "rt")
-        else: f = open(gfffile, "r")
-        for line in f:
-            line=line.strip()
-            if line and (line[0] != '#'):
-                # this splits the lines by tabs, and removes trailing tabs
-                splitd = re.split(r'\t+', line.rstrip('\t'))
-                # we can just look for either CDS or exon here because
-                # it doesn't matter. The first start and last stop will
-                # be properly recorded.
-                if splitd[2] in ["exon", "CDS"]:
-                    skip_this = False
-                    if "tRNAscan" in splitd[8]:
-                        skip_this = True
-                    if not skip_this:
-                        chrom = splitd[0]
-                        start = int(splitd[3])
-                        stop = int(splitd[4])
-                        parent = parent_from_gff_comment(splitd[8])
-                        if parent in gene_list:
-                            print("{}\t{}\t{}".format(chrom, start, stop), file = temp_bed_handle)
-        f.close()
+        for this_gene in gene_list:
+            chrom = parent_to_exons[this_gene]["chrom"]
+            for ss in parent_to_exons[this_gene]["exons"]:
+                print("{}\t{}\t{}".format(chrom, ss[0], ss[1]), file=temp_bed_handle)
         temp_bed_handle.close()
 
         # now merge all the exons from this genelist
@@ -272,17 +290,21 @@ def num_exon_bases_in_genelist(gfffile, gene_list, outfile=""):
         os.remove(temp_bed)
         if outfile != "":
             os.rename(temp_bed2, outfile)
+            assert os.path.exists(outfile)
         else:
             os.remove(temp_bed2)
         return exon_bp
 
 def gff_coding_intervals(gfffile):
     """
-    Returns a dict with this structure.
+    Returns three things: a dict with this structure.
      Coding regions defined here:
-         ranges[parent] = {"start": start, "stop": stop,
+    (exon_ranges)     ranges[parent] = {"start": start, "stop": stop,
                            "chrom": chrom, "direction": direction,
                            "seqname": parent}
+
+    (introns_df) a dataframe with the intron intervals
+    (gene_exon_dict) a dict with gene as lookup and a set of intervals for exons
     """
     ranges = {}
     exons = {}
@@ -375,7 +397,8 @@ def gff_coding_intervals(gfffile):
             if in_intron:
                 raise IOError("This transcript is capped by an intron. {}".format(parent_name))
     introns_df = pd.DataFrame.from_records(intron_list)
-    return ranges, introns_df
+
+    return ranges, introns_df, {key:{"chrom":ranges[key]["chrom"], "exons":exons[key]} for key in ranges}
 
 def gff_to_genic_bed(ranges, genic_bed):
     """
@@ -397,6 +420,7 @@ def gff_to_genic_bed(ranges, genic_bed):
                sort -k1,1 -k2,2n > {}""".format(temp_bed, genic_bed)
     runner(run_this)
     os.remove(temp_bed)
+
 
 def main():
     # make sure the program has the right commands
@@ -521,7 +545,7 @@ def main():
     if os.path.exists(genic_bed):
         print("    - file already exists", file=sys.stderr)
     else:
-        exon_ranges, introns_df = gff_coding_intervals(gff_file)
+        exon_ranges, introns_df, parent_to_exons = gff_coding_intervals(gff_file)
         gff_to_genic_bed(exon_ranges, genic_bed)
     assert os.path.exists(genic_bed)
 
@@ -652,35 +676,29 @@ def main():
     print("  - Converting exon ranges to df.", file = sys.stderr)
     raw_tx_file = "{}_transcripts.txt".format(out_prefix)
     introns_file = "{}_introns.txt".format(out_prefix)
-    if os.path.exists(raw_tx_file):
-        print("    - file exists: {}".format(raw_tx_file), file=sys.stderr)
-        raw_tx_df = pd.read_csv(raw_tx_file, sep="\t", header=0)
-        if not os.path.exists(introns_file):
-            raise IOError("introns file doesn't exist, but should")
-        else:
-            introns_df = pd.read_csv(introns_file, sep = "\t", header = 0)
+    exon_ranges_exists = 'exon_ranges' in locals() or 'exon_ranges' in globals()
+    introns_df_exists = 'introns_df' in locals() or 'exon_ranges' in globals()
+    parent_to_exons_exists = 'parent_to_exons' in locals() or 'exon_ranges' in globals()
+    if exon_ranges_exists and introns_df_exists and parent_to_exons_exists:
+        pass
     else:
-        print("    - Couldn't find the raw transcript file: {}".format(raw_tx_file), file=sys.stderr)
-        exon_ranges_exists = 'exon_ranges' in locals() or 'exon_ranges' in globals()
-        if exon_ranges_exists:
-            pass
-        else:
-            print("    - No information on exon ranges. Generating from gff.", file=sys.stderr)
-            exon_ranges, introns_df = gff_coding_intervals(gff_file)
-            print("    - Converting exon ranges to a dataframe.", file=sys.stderr)
-        raw_tx_df = pd.DataFrame.from_records(exon_ranges).T
-        raw_tx_df["start"] = raw_tx_df["start"].astype(int)
-        raw_tx_df["stop"]  = raw_tx_df["stop"].astype(int)
-        raw_tx_df.reset_index(inplace=True, drop=True)
-        print("    - saving the transcripts file", file = sys.stderr)
-        raw_tx_df.to_csv(raw_tx_file, index=False, sep="\t")
-        print("    - saving the introns file", file = sys.stderr)
-        introns_df.to_csv(introns_file, index=False, sep="\t")
+        print("    - No information on exon ranges. Generating from gff.", file=sys.stderr)
+        exon_ranges, introns_df, parent_to_exons = gff_coding_intervals(gff_file)
+        print("    - Converting exon ranges to a dataframe.", file=sys.stderr)
+    raw_tx_df = pd.DataFrame.from_records(exon_ranges).T
+    raw_tx_df["start"] = raw_tx_df["start"].astype(int)
+    raw_tx_df["stop"]  = raw_tx_df["stop"].astype(int)
+    raw_tx_df.reset_index(inplace=True, drop=True)
+    print("    - saving the transcripts file", file = sys.stderr)
+    raw_tx_df.to_csv(raw_tx_file, index=False, sep="\t")
+    print("    - saving the introns file", file = sys.stderr)
+    introns_df.to_csv(introns_file, index=False, sep="\t")
     assert os.path.exists(raw_tx_file)
     assert os.path.exists(introns_file)
 
+
     print("  - Clipping off a few percent of the ends of exons for tolerance", file = sys.stderr)
-    tx_df_ss = transcript_90per_start_stop(raw_tx_df)
+    tx_df_ss = transcript_85per_start_stop(raw_tx_df)
 
     for intron_filter in ["noIFilt", "iFilt"]:
         if intron_filter == "iFilt":
@@ -692,6 +710,7 @@ def main():
         # now get the pairs of transcripts
         print("    - Finding genes in transcripts", file = sys.stderr)
         df_genes_in_introns = find_gene_in_intron(introns_df, tx_df_ss)
+        print("      - Saving transcripts to file", file = sys.stderr)
         genes_in_introns_file = "{}_genes_in_introns_{}.txt".format(out_prefix, intron_filter)
         df_genes_in_introns.to_csv(genes_in_introns_file, index=False, sep="\t")
         # End of section about finding transcripts inside the introns of other transcripts
@@ -718,30 +737,39 @@ def main():
         # num bp sense
         if "sense_anti" in df_genes_in_introns.columns:
             sense_gene_list = list(df_genes_in_introns.loc[df_genes_in_introns["sense_anti"] == "sense", "gene"].unique())
-            bp_sense_exons = num_exon_bases_in_genelist(gff_file, sense_gene_list)
+            bp_sense_exons = num_exon_bases_in_genelist(parent_to_exons, sense_gene_list)
             # num bp antisense
             antisense_gene_list = list(df_genes_in_introns.loc[df_genes_in_introns["sense_anti"] == "antisense", "gene"].unique())
-            bp_antisense_exons = num_exon_bases_in_genelist(gff_file, antisense_gene_list)
+            bp_antisense_exons = num_exon_bases_in_genelist(parent_to_exons, antisense_gene_list)
             # num bp both
             all_gene_list = list(df_genes_in_introns["gene"].unique())
-            bp_all_exons = num_exon_bases_in_genelist(gff_file, all_gene_list)
+            bp_all_exons = num_exon_bases_in_genelist(parent_to_exons, all_gene_list)
 
             # now get in-intron genes that break splicing
             sense_df = df_genes_in_introns.loc[df_genes_in_introns["sense_anti"] == "sense",]
             breaks_splicing_df = sense_df.loc[sense_df["num_exons"] > 1, ]
             breaks_splicing_genelist = list(breaks_splicing_df["gene"].unique())
             breaks_splicing_bed = "{}_breaks_splicing_bed_{}.bed".format(out_prefix, intron_filter)
-            bp_breaks_splicing = num_exon_bases_in_genelist(gff_file, breaks_splicing_genelist, breaks_splicing_bed)
+            bp_breaks_splicing = num_exon_bases_in_genelist(parent_to_exons, breaks_splicing_genelist, breaks_splicing_bed)
 
             # now get in-intron genes that don't break splicing
             doesnt_break_splicing_df = df_genes_in_introns[~df_genes_in_introns.index.isin(breaks_splicing_df.index)]
             doesnt_break_splicing_genes = list(doesnt_break_splicing_df["gene"].unique())
             doesnt_break_splicing_bed = "{}_doesnt_break_splicing_bed_{}.bed".format(out_prefix, intron_filter)
-            doesnt_break_splicing_genes_bp = num_exon_bases_in_genelist(gff_file, doesnt_break_splicing_genes, doesnt_break_splicing_bed)
+            doesnt_break_splicing_genes_bp = num_exon_bases_in_genelist(parent_to_exons, doesnt_break_splicing_genes, doesnt_break_splicing_bed)
+
             # now get the num bp of single sense exons
             single_exon_sense_df = sense_df.loc[sense_df["num_exons"] == 1, ]
             single_exon_sense_genelist = list(single_exon_sense_df["gene"].unique())
-            single_exon_sense_bp = num_exon_bases_in_genelist(gff_file, single_exon_sense_genelist)
+            single_exon_sense_bp = num_exon_bases_in_genelist(parent_to_exons, single_exon_sense_genelist)
+
+            # now get bulk hosted-to-host ratio
+            hosted_list = list(df_genes_in_introns["gene"].unique())
+            hosted_bp = num_exon_bases_in_genelist(parent_to_exons, hosted_list)
+
+            host_list   = [x for x in df_genes_in_introns["surrounding_gene"].unique() if x not in hosted_list]
+            host_bp     = num_exon_bases_in_genelist(parent_to_exons, host_list)
+
         else:
             bp_sense_exons                 = 0
             bp_antisense_exons             = 0
@@ -749,6 +777,8 @@ def main():
             bp_breaks_splicing             = 0
             doesnt_break_splicing_genes_bp = 0
             single_exon_sense_bp           = 0
+            hosted_bp                      = 0
+            host_bp                        = 0
 
         genome_stats = "{}_genome_stats_{}.txt".format(out_prefix, intron_filter)
         print("    - Printing genome stats to {}".format(genome_stats), file=sys.stderr)
@@ -808,6 +838,10 @@ def main():
                 print("single_exon_sense_bp\t{}\t{:.4f}\t(This is the percent of the total sense exonic bp)".format(
                     single_exon_sense_bp,
                     (single_exon_sense_bp/bp_sense_exons)*100), file= writehere)
+
+            print("host_bp\t{}".format(host_bp), file= writehere)
+            print("hosted_bp\t{}".format(hosted_bp), file= writehere)
+
         outfile.close()
         # if we had to make a temp fasta, remove it and its index now.
     if ref_gzipped:
