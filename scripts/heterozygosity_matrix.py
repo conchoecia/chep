@@ -7,22 +7,37 @@ samtools mpileup -f assembly.fasta shot_to_assem.sorted.bam | \
 """
 import argparse
 import pandas as pd
+import seaborn as sns; sns.set()
+import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mplpatches
+import matplotlib.ticker as ticker
+from matplotlib.ticker import StrMethodFormatter, NullFormatter
 from matplotlib import rc
 import numpy as np
 import os
 import sys
 
-rc('text', usetex=True)
-plt.rcParams['text.latex.preamble'] = [
-        r'\usepackage{siunitx}',    # micro symbols
-        r'\sisetup{detect-all}',   # ...this to force siunitx to actually use your fonts
-        r'\usepackage{tgheros}',    # helvetica font
-        r'\usepackage{sansmath}',   # math-font matching  helvetica
-        r'\sansmath'                # actually tell tex to use it!
-        r'\sisetup{detect-all}',    # force siunitx to use the fonts
-        ]
+# set seaborn stuff
+#sns.set(rc={'text.usetex' : True})
+sns.set_style("white", {'font.family': ['sans-serif'],
+                            'font.sans-serif': ['Helvetica'],
+                            'grid.color': '.95'})
+
+# Preserve the vertical order of embedded images:
+matplotlib.rcParams['image.composite_image'] = False
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
+
+#rc('text', usetex=True)
+#plt.rcParams['text.latex.preamble'] = [
+#        r"\usepackage{siunitx}",    # micro symbols
+#        r"\sisetup{detect-all}",   # ...this to force siunitx to actually use your fonts
+#        r"\usepackage{tgheros}",    # helvetica font
+#        r"\usepackage{sansmath}",   # math-font matching  helvetica
+#        "\sansmath"
+#        r"\sisetup{detect-all}",    # force siunitx to use the fonts
+#        ]
 
 
 def argparser():
@@ -80,7 +95,7 @@ def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False):
     panel1.set_xlim([xmin, xmax])
     panel1.set_ylim([0, xmax*1.1])
     panel1.set_xlabel("read depth")
-    panel1.set_ylabel("\# of reference bases")
+    panel1.set_ylabel("# of reference bases")
     panel1.tick_params(axis='both', which='both', labelsize=6)
 
     # now make the color label
@@ -143,7 +158,7 @@ def figure_with_marginal_histogram(fname, outprefix, xmin, xmax,
     panel1.set_xlim([xmin, xmax])
     panel1.set_ylim([0, xmax*1.1])
     panel1.set_xlabel("read depth")
-    panel1.set_ylabel("\# of reference bases")
+    panel1.set_ylabel("# of reference bases")
     panel1.tick_params(axis='both', which='both', labelsize=6)
 
     df.rename(columns={0: "depth", 1: "ref", 2: "count"}, inplace=True)
@@ -201,14 +216,14 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
     panel1.set_xlim([xmin, xmax])
     panel1.set_ylim([0, xmax*1.1])
     panel1.set_xlabel("read depth")
-    panel1.set_ylabel("\# of reference bases")
+    panel1.set_ylabel("# of reference bases")
     panel1.tick_params(axis='both', which='both', labelsize=6)
 
     # now plot the depth coverage histogram
     df.rename(columns={0: "depth", 1: "ref", 2: "count"}, inplace=True)
     df2 = df.groupby("depth")["count"].sum()
     panel2.set_xlim([xmin, xmax])
-    panel2.set_ylabel("\# of bases")
+    panel2.set_ylabel("# of bases")
     panel2.tick_params(
             axis='both',          # changes apply to the x-axis
             which='both',      # both major and minor ticks are affected
@@ -275,7 +290,7 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
                 het_dict[i]["{}flank_pergenom".format(j)] = pergenom
                 het_dict[i]["{}flank_het".format(j)]      = het
     panel3.set_xlim([xmin, xmax])
-    panel3.set_ylabel("\% Het")
+    panel3.set_ylabel("% Het")
     panel3.tick_params(
             axis='both',          # changes apply to the x-axis
             which='both',      # both major and minor ticks are affected
