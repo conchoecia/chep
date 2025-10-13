@@ -165,7 +165,7 @@ rule merge_all:
         runtime = estimate_merge_runtime
     shell:
         """
-        echo "Merging {len(input)} files..."
+        echo "Merging input files..."
         python3 scripts/merge_chep3d.py {input} > {output}
         echo "Merge complete: {output}"
         """
