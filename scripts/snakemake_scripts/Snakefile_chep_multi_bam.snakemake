@@ -32,6 +32,15 @@ BAM_DICT = dict(zip(BAM_IDS, BAMS))
 # Define output directory
 os.makedirs(WORKDIR, exist_ok=True)
 
+def get_reference_size_gb():
+    """Get reference genome file size in GB"""
+    try:
+        size_bytes = os.path.getsize(REF)
+        return size_bytes / (1024 * 1024 * 1024)
+    except:
+        # If we can't get size, use the config genome size
+        return GENOME_SIZE_GB
+
 def get_bam_size_mb(wildcards):
     """Get BAM file size in MB"""
     bam_path = BAM_DICT[wildcards.bam_id]
@@ -44,13 +53,13 @@ def get_bam_size_mb(wildcards):
 
 def estimate_mem_mb(wildcards, attempt=1):
     """
-    Estimate memory needed based on BAM size.
-    Empirical data: 283MB BAM used 412MB RAM with 3Gbp genome
-    Ratio: ~1.5x BAM size in MB, with generous buffer
-    Add buffer for safety and retry attempts
+    Estimate memory needed based on reference genome size.
+    Memory is dominated by samtools mpileup loading the reference genome.
+    Empirical data: 3Gbp genome with 283MB BAM used 412MB RAM
+    Using conservative estimate: genome_size_gb * 2000 MB/GB + 2000 MB buffer
     """
-    bam_size_mb = get_bam_size_mb(wildcards)
-    base_mem = max(2000, int(bam_size_mb * 2.5))  # At least 2GB, 2.5x BAM size for safety
+    ref_size_gb = get_reference_size_gb()
+    base_mem = max(4000, int(ref_size_gb * 2000) + 2000)  # At least 4GB
     # Increase memory on retry attempts
     return base_mem * attempt
 
@@ -102,7 +111,7 @@ rule process_single_bam:
     Copies BAM and index to local tmpdir, runs mpileup, then cleans up.
     
     Resources are dynamically allocated based on BAM file size:
-    - Memory: ~1.5x BAM size (empirically validated)
+    - Memory: Based on reference genome size (~2GB per Gbp of genome + 2GB buffer)
     - Runtime: ~0.046 min/MB of BAM (from 283MB→13min benchmark)
     - Disk: 1.2x BAM size for local copy + index
     """
