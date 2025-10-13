@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
   std::cout << "# depth min max\n";
   std::map<uint,std::tuple<uint,uint>> table;
   for (uint i = vars.peak-vars.flank ; i <= vars.peak + vars.flank +1 ; i++){
-    table[i]= {i*0.25, ceil(i*0.75)};
+    table[i] = std::make_tuple(static_cast<uint>(i*0.25), static_cast<uint>(ceil(i*0.75)));
     std::cout << "# " << " " << i << " " << std::get<0>(table[i]) << " " << std::get<1>(table[i]) << "\n";
   }
 
