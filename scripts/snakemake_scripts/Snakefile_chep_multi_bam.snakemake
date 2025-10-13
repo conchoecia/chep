@@ -117,7 +117,7 @@ rule process_single_bam:
     - Disk: 1.2x BAM size for local copy + index
     """
     output:
-        temp(f"{WORKDIR}/{{bam_id}}.chep3d.txt")
+        f"{WORKDIR}/{{bam_id}}.chep3d.txt"
     params:
         bam_path = lambda wildcards: BAM_DICT[wildcards.bam_id],
         ref = REF
