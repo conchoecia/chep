@@ -9,7 +9,7 @@ bin/chep_pileup_to_array: src/pileup_to_array.cpp src/pileup_to_array.hpp
 	g++ ${CPPF} -o bin/chep_pileup_to_array src/pileup_to_array.cpp
 
 bin/chep_windowed_het: src/windowed_het.cpp src/windowed_het.hpp
-	g++ -o bin/chep_windowed_het src/windowed_het.cpp
+	g++ ${CPPF} -o bin/chep_windowed_het src/windowed_het.cpp
 
 bin/chep_plot: scripts/heterozygosity_matrix.py
 	chmod ugo+x scripts/heterozygosity_matrix.py; \
