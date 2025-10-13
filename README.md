@@ -56,9 +56,51 @@ export PATH=$PATH:/home/dschultz/chep/bin
 
 First, generate a bam file of shotgun long- or short reads to a reference genome. Then, run `mpileup` on the bam and pipe the output into `chep`.
 
+**Important: Always use these samtools mpileup options: `-B -Q 0 -q 0 -A -R`**
+
 ```
-samtools mpileup -f ref.fa shot_to_ref.sorted.bam | chep_pileup_to_array > chep_3D.txt
+samtools mpileup -B -Q 0 -q 0 -A -R -f ref.fa shot_to_ref.sorted.bam | chep_pileup_to_array > chep_3D.txt
 ```
+
+The samtools mpileup flags:
+- `-B` : Disable base alignment quality (BAQ) computation
+- `-Q 0` : Skip bases with base quality smaller than 0 (include all bases)
+- `-q 0` : Skip alignments with mapping quality smaller than 0 (include all alignments)
+- `-A` : Count anomalous read pairs
+- `-R` : Output all reads regardless of read group
+
+## Processing multiple BAM files
+
+For large numbers of BAM files, use the batch processing script with GNU parallel:
+
+```
+# Process 768 BAMs in batches of 50, using 32 parallel jobs
+./scripts/process_bams_in_batches.sh reference.fa bam_list.txt output.txt 32
+```
+
+Or use the Snakemake workflow for distributed processing on SLURM clusters:
+
+```
+Or use the Snakemake workflow for distributed processing on SLURM clusters:
+
+```bash
+# Submit Snakemake workflow to SLURM (processes each BAM independently)
+# Resources are dynamically allocated based on BAM file sizes
+sbatch scripts/bash_scripts/submit_chep_snakemake.sh reference.fa bam_list.txt output.txt 100
+
+# For non-human genomes, specify genome size in Gbp
+snakemake -s scripts/snakemake_scripts/Snakefile_chep_multi_bam.snakemake \
+    --config ref=reference.fa bam_list=bam_list.txt output=output.txt genome_size_gb=0.5 \
+    --executor slurm --jobs 100
+```
+
+The Snakemake workflow dynamically allocates resources based on:
+- **BAM file size**: Larger BAMs get more memory and time
+- **Number of files**: Merge step scales with file count
+- Empirical benchmarks: 283MB BAM with 3Gbp genome takes ~13min and ~412MB RAM
+```
+
+## Plotting results
 
 Then plot the results. Add your own parameters for `-x x_min` and `-X x_max`, or `-d` to make the plot on a back background. 
 

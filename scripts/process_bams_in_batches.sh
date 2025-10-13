@@ -50,7 +50,7 @@ process_batch() {
     local tmpdir=$3
     local batch_name=$(basename ${batch})
     
-    samtools mpileup -f ${ref} -b ${batch} | \
+    samtools mpileup -B -Q 0 -q 0 -A -R -f ${ref} -b ${batch} | \
         chep_pileup_to_array > ${tmpdir}/output_${batch_name}.txt
     
     echo "Completed: ${batch_name}"
