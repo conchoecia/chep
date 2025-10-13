@@ -32,15 +32,6 @@ BAM_DICT = dict(zip(BAM_IDS, BAMS))
 # Define output directory
 os.makedirs(WORKDIR, exist_ok=True)
 
-def get_reference_size_gb():
-    """Get reference genome file size in GB"""
-    try:
-        size_bytes = os.path.getsize(REF)
-        return size_bytes / (1024 * 1024 * 1024)
-    except:
-        # If we can't get size, use the config genome size
-        return GENOME_SIZE_GB
-
 def get_bam_size_mb(wildcards):
     """Get BAM file size in MB"""
     bam_path = BAM_DICT[wildcards.bam_id]
@@ -53,13 +44,13 @@ def get_bam_size_mb(wildcards):
 
 def estimate_mem_mb(wildcards, attempt=1):
     """
-    Estimate memory needed based on reference genome size.
-    Memory is dominated by samtools mpileup loading the reference genome.
-    Empirical data: 3Gbp genome with 283MB BAM used 412MB RAM
-    Using conservative estimate: genome_size_gb * 2000 MB/GB + 2000 MB buffer
+    Estimate memory needed based on BAM size.
+    Empirical data: 283MB BAM used 412MB RAM with 3Gbp genome
+    Ratio: ~1.5x BAM size in MB
+    Add buffer for safety and retry attempts
     """
-    ref_size_gb = get_reference_size_gb()
-    base_mem = max(4000, int(ref_size_gb * 2000) + 2000)  # At least 4GB
+    bam_size_mb = get_bam_size_mb(wildcards)
+    base_mem = max(1000, int(bam_size_mb * 1.5))  # At least 1GB
     # Increase memory on retry attempts
     return base_mem * attempt
 
@@ -68,10 +59,10 @@ def estimate_runtime(wildcards, attempt=1):
     Estimate runtime based on BAM size.
     Empirical data: 283MB BAM took ~13 minutes with 3Gbp genome
     Rate: ~0.046 minutes per MB of BAM (~22 MB/min throughput)
-    Using 3x safety factor for network filesystems and variability
+    Add buffer for safety and retry attempts
     """
     bam_size_mb = get_bam_size_mb(wildcards)
-    base_time = max(30, int(bam_size_mb * 0.046 * 3))  # At least 30 min, 3x safety factor
+    base_time = max(15, int(bam_size_mb * 0.046 * 1.5))  # At least 15 min, 1.5x safety factor
     # Increase time on retry attempts
     return base_time * attempt
 
@@ -89,8 +80,8 @@ def estimate_merge_mem_mb(wildcards, input, attempt=1):
     Each file is small (just counts), but need some overhead.
     """
     num_files = len(input)
-    base_mem = 4000 + (num_files * 4)  # 4GB base + 4MB per file
-    return min(base_mem * attempt, 32000)  # Cap at 32GB
+    base_mem = 2000 + (num_files * 2)  # 2GB base + 2MB per file
+    return min(base_mem * attempt, 16000)  # Cap at 16GB
 
 def estimate_merge_runtime(wildcards, input, attempt=1):
     """
@@ -98,7 +89,7 @@ def estimate_merge_runtime(wildcards, input, attempt=1):
     This is I/O bound, mainly reading many small files.
     """
     num_files = len(input)
-    base_time = max(30, int(num_files * 0.1))  # ~6 seconds per file, minimum 30 min
+    base_time = max(10, int(num_files * 0.05))  # ~3 seconds per file, minimum 10 min
     return base_time * attempt
 
 rule all:
@@ -111,7 +102,7 @@ rule process_single_bam:
     Copies BAM and index to local tmpdir, runs mpileup, then cleans up.
     
     Resources are dynamically allocated based on BAM file size:
-    - Memory: Based on reference genome size (~2GB per Gbp of genome + 2GB buffer)
+    - Memory: ~1.5x BAM size (empirically validated)
     - Runtime: ~0.046 min/MB of BAM (from 283MB→13min benchmark)
     - Disk: 1.2x BAM size for local copy + index
     """
@@ -130,32 +121,30 @@ rule process_single_bam:
         # Create local temporary directory
         TMPDIR=${{TMPDIR:-/tmp}}
         LOCAL_TMP=$(mktemp -d $TMPDIR/chep_XXXXXX)
-        
+
         echo "Working directory: $LOCAL_TMP"
         echo "Processing BAM: {params.bam_path}"
-        
+
         # Copy BAM and its index to local tmpdir with unique name
         # Use wildcards.bam_id to ensure unique filename even if source BAMs have same basename
         LOCAL_BAM=$LOCAL_TMP/{wildcards.bam_id}.bam
         cp {params.bam_path} $LOCAL_BAM
-        
-        # Copy index file (try both .bai and .bam.bai extensions)
+
+        # Copy index file (.bam.bai)
         if [ -f {params.bam_path}.bai ]; then
             cp {params.bam_path}.bai $LOCAL_BAM.bai
-        elif [ -f ${{params.bam_path%.bam}}.bai ]; then
-            cp ${{params.bam_path%.bam}}.bai $LOCAL_BAM.bai
         else
             echo "Warning: Index file not found, will create one"
             samtools index $LOCAL_BAM
         fi
-        
+
         # Run mpileup on the local copy
         samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} $LOCAL_BAM | \
             chep_pileup_to_array > {output}
-        
+
         # Cleanup
         rm -rf $LOCAL_TMP
-        
+
         echo "Completed: {wildcards.bam_id}"
         """
 
