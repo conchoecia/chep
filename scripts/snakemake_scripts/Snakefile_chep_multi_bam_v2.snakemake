@@ -164,8 +164,7 @@ rule split_bam_all_chromosomes:
     """
     input:
         bam = lambda wc: BAM_DICT[wc.bam_id],
-        chroms_dir = lambda wc: checkpoints.get_chromosomes.get(**wc).output.chroms_dir
-        chroms_dir = expand(f"{WORKDIR}/chromosomes/{chrom}.txt", chrom=get_chromosomes_from_checkpoint)
+        chroms_dir = lambda wc: checkpoints.get_chromosomes.get(**wc).output.chroms_dir,
     output:
         lambda wc: [os.path.join(WORKDIR, "split_bams", f"{wc.bam_id}.{c}.bam")
                     for c in get_chromosomes_from_checkpoint(wc)]
@@ -175,44 +174,35 @@ rule split_bam_all_chromosomes:
         bam_id = "{bam_id}"
     threads: 2
     resources:
-        mem_mb = estimate_mem_mb_split,
+        mem_mb  = estimate_mem_mb_split,
         runtime = estimate_runtime_split
     shell:
         """
-        TMPDIR=${{TMPDIR:-/tmp}}
-        LOCAL_TMP=$(mktemp -d $TMPDIR/chep_split_XXXXXX)
+        TMPDIR=${TMPDIR:-/tmp}
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_split_XXXXXX")
 
-        echo "Splitting {params.bam_path} for all chromosomes"
+        echo "Splitting {input.bam} for all chromosomes"
 
-        # Copy BAM to local tmpdir
-        LOCAL_BAM=$LOCAL_TMP/input.bam
-        cp {params.bam_path} $LOCAL_BAM
-
-        # Copy index if exists, otherwise create it
-        if [ -f {params.bam_path}.bai ]; then
-            cp {params.bam_path}.bai $LOCAL_BAM.bai
+        # Stage BAM + index
+        LOCAL_BAM="$LOCAL_TMP/input.bam"
+        cp {input.bam} "$LOCAL_BAM"
+        if [ -f {input.bam}.bai ]; then
+            cp {input.bam}.bai "$LOCAL_BAM.bai"
         else
-            samtools index $LOCAL_BAM
+            samtools index "$LOCAL_BAM"
         fi
-        
-        # Create output directory for split BAMs
-        mkdir -p $LOCAL_TMP/outputs
-        mkdir -p {params.outdir}
-        
-        # Split into per-chromosome BAMs
+
+        mkdir -p "$LOCAL_TMP/outputs" "{params.outdir}"
+
+        # Loop over chromosome markers
         for chrom_file in {input.chroms_dir}/*.txt; do
-            chrom=$(basename $chrom_file .txt)
-            echo "  Extracting $chrom"
-            samtools view -@ {threads} -b $LOCAL_BAM "$chrom" > $LOCAL_TMP/outputs/{params.bam_id}.$chrom.bam
+            chrom=$(basename "$chrom_file" .txt)
+            samtools view -@ {threads} -b "$LOCAL_BAM" "$chrom" \
+              > "$LOCAL_TMP/outputs/{wildcards.bam_id}.$chrom.bam"
         done
-        
-        # Copy all results back
-        cp $LOCAL_TMP/outputs/* {params.outdir}/
-        
-        # Cleanup
-        rm -rf $LOCAL_TMP
-        
-        echo "Completed split: {params.bam_id} (all chromosomes)"
+
+        cp "$LOCAL_TMP/outputs/"*.bam "{params.outdir}/"
+        rm -rf "$LOCAL_TMP"
         """
 
 #rule merge_chromosome_bams:
