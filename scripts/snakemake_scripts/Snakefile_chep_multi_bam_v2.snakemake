@@ -195,7 +195,9 @@ rule split_bam_by_chromosome:
         cp "$LOCAL_OUT" {output.bam}
 
         echo "Completed: {wildcards.bam_id}.{wildcards.chrom}"
-        """def get_all_split_bams_for_chrom(wildcards):
+        """
+
+def get_all_split_bams_for_chrom(wildcards):
     """Get all split BAMs across all samples for one chromosome"""
     # Trigger checkpoint evaluation
     checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
