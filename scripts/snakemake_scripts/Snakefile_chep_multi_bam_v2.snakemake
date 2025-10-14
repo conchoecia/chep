@@ -100,29 +100,20 @@ def get_chromosomes_from_checkpoint(wildcards):
     chroms = [os.path.basename(f).replace('.txt', '') for f in chrom_files]
     return chroms
 
-def get_split_bams_for_bam_id(wildcards):
-    """Get all split BAM files for a given bam_id"""
+def get_chrom_files_for_split(wildcards):
+    """Get list of chromosome marker files from checkpoint"""
     checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
-    chroms = get_chromosomes_from_checkpoint(wildcards)
-    return expand(f"{WORKDIR}/split_bams/{wildcards.bam_id}.{{chrom}}.bam", chrom=chroms)
+    chrom_files = glob.glob(checkpoint_output + "/*.txt")
+    return chrom_files
 
 def _all_split_bams(wc):
     chroms = get_chromosomes_from_checkpoint(wc)
-    return [os.path.join(WORKDIR, "split_bams", f"{bid}.{c}.bam")
+    return [os.path.join(WORKDIR, "split_bams", bid + "." + c + ".bam")
             for bid in BAM_IDS for c in chroms]
 
 # limit the chromosome wildcard text to be A-z, 0-9, underscore, hyphen, and dot
 wildcard_constraints:
     chrom = r"[A-Za-z0-9_.-]+"
-
-def _all_chrom_txts(wildcards):
-    # Wait for checkpoint; get its dynamic output dir
-    chroms_dir = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
-    # Infer chromosome names from files created by the checkpoint
-    pat = os.path.join(chroms_dir, "{chrom}.txt")
-    chroms = list(glob_wildcards(pat).chrom)
-    # Return the full paths to require in rule all
-    return [os.path.join(chroms_dir, f"{c}.txt") for c in chroms]
 
 rule all:
     input:
@@ -138,8 +129,8 @@ checkpoint get_chromosomes:
     input:
         fai = REF + ".fai"
     output:
-        fai = f"{WORKDIR}/genome.fai",
-        chroms_dir = directory(f"{WORKDIR}/chromosomes")
+        fai = WORKDIR + "/genome.fai",
+        chroms_dir = directory(WORKDIR + "/chromosomes")
     shell:
         """
         cp {input.fai} {output.fai}
@@ -161,14 +152,19 @@ rule split_bam_by_chromosome:
     """
     Split a single BAM file into per-chromosome BAMs (all chromosomes at once).
     Copy to local tmpdir for I/O efficiency - only copies BAM once!
+    
+    This rule will be run once per bam_id. The output BAMs are determined by
+    examining which chromosomes were created by the checkpoint.
+    Creates a flag file to mark completion, and the actual BAM files.
     """
     input:
         bam = lambda wc: BAM_DICT[wc.bam_id],
-        chroms_dir = WORKDIR + "/chromosomes"
+        chrom_files = get_chrom_files_for_split
     output:
-        bams = get_split_bams_for_bam_id
+        touch(WORKDIR + "/split_bams/{bam_id}.done")
     params:
-        outdir = WORKDIR + "/split_bams"
+        outdir = WORKDIR + "/split_bams",
+        bam_id = "{bam_id}"
     threads: 2
     resources:
         mem_mb  = estimate_mem_mb_split,
@@ -178,7 +174,7 @@ rule split_bam_by_chromosome:
         TMPDIR=${{TMPDIR:-/tmp}}
         LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_split_XXXXXX")
 
-        echo "Splitting {wildcards.bam_id} for all chromosomes"
+        echo "Splitting {params.bam_id} for all chromosomes"
 
         # Stage BAM + index
         LOCAL_BAM="$LOCAL_TMP/input.bam"
@@ -192,10 +188,10 @@ rule split_bam_by_chromosome:
         mkdir -p "$LOCAL_TMP/outputs" {params.outdir}
 
         # Loop over chromosome markers and extract each one
-        for chrom_file in {input.chroms_dir}/*.txt; do
+        for chrom_file in {input.chrom_files}; do
             chrom=$(basename "$chrom_file" .txt)
             echo "  Extracting $chrom"
-            samtools view -@ {threads} -b "$LOCAL_BAM" "$chrom" > "$LOCAL_TMP/outputs/{wildcards.bam_id}.$chrom.bam"
+            samtools view -@ {threads} -b "$LOCAL_BAM" "$chrom" > "$LOCAL_TMP/outputs/{params.bam_id}.$chrom.bam"
         done
 
         # Copy all results back
@@ -203,7 +199,7 @@ rule split_bam_by_chromosome:
 
         rm -rf "$LOCAL_TMP"
         
-        echo "Completed split: {wildcards.bam_id} (all chromosomes)"
+        echo "Completed split: {params.bam_id} (all chromosomes)"
         """
 
 def get_all_split_bams_for_chrom(wildcards):
