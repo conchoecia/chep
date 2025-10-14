@@ -206,7 +206,7 @@ rule mpileup_batch:
     threads: 1
     resources:
         mem_mb = lambda wildcards, attempt: max(4000, BATCH_SIZE * 500) * attempt,
-        runtime = lambda wildcards, attempt: 30 * attempt  # ~30 minutes per batch
+        runtime = lambda wildcards, attempt: 120 * attempt  # ~2 hours per batch (10 BAMs × genome processing + awk merging)
     shell:
         """
         echo "Processing {params.batch_id} with {params.num_bams} BAMs"
