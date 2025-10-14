@@ -139,9 +139,9 @@ rule split_bam_all_chromosomes:
     Copy to local tmpdir for I/O efficiency - only copies BAM once!
     """
     input:
-        chroms_dir = f"{WORKDIR}/chromosomes"
+        chroms_dir = expand(f"{WORKDIR}/chromosomes/{chrom}.txt", chrom=get_chromosomes_from_checkpoint)
     output:
-        bams = get_split_bams_for_bam_id
+        bams = expand(f"{WORKDIR}/split_bams/{bam_id}.{{chrom}}.bam", chrom=get_chromosomes_from_checkpoint)
     params:
         bam_path = lambda wildcards: BAM_DICT[wildcards.bam_id],
         outdir = f"{WORKDIR}/split_bams",
