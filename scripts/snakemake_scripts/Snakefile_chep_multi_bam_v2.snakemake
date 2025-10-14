@@ -237,9 +237,23 @@ rule mpileup_batch:
         done
         
         # Run mpileup with -b option for multi-BAM processing, write to tmpdir
+        # Pipe through awk to merge columns from multiple BAMs into one
         echo "Running mpileup on {params.num_bams} BAMs in {params.batch_id}..."
         LOCAL_OUT="$LOCAL_TMP/output.pileup.gz"
-        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} -b "$BAM_LIST" | gzip > "$LOCAL_OUT"
+        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} -b "$BAM_LIST" \
+        | awk 'BEGIN{{OFS="\t"}}{{ \
+            sum=0; b=""; q=""; \
+            for (i=4; i<=NF; i+=3) {{ \
+                d=$i; rb=$(i+1); rq=$(i+2); \
+                if (d>0) {{ \
+                    sum+=d; \
+                    if (rb!="*") b=b rb; \
+                    if (rq!="*") q=q rq; \
+                }} \
+            }} \
+            print $1,$2,$3,sum,(sum?b:"*"),(sum?q:"*"); \
+        }}' \
+        | gzip > "$LOCAL_OUT"
         
         # Copy result to final destination
         mkdir -p $(dirname {output.pileup})
