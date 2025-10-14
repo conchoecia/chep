@@ -93,6 +93,78 @@ def estimate_runtime_mpileup(wildcards, attempt=1):
     base_time = max(60, int(num_bams * 0.5))  # ~30 seconds per BAM
     return base_time * attempt
 
+def estimate_mem_mb_for_bam(wildcards, attempt=1):
+    """
+    Memory estimate for mpileup on a single BAM.
+    Based on reference genome size and BAM file size.
+    - Reference genome size affects memory for loading reference
+    - BAM size affects memory for caching and processing
+    """
+    try:
+        # Get reference size in GB
+        ref_size_gb = get_reference_size_gb()
+        
+        # Get BAM size in MB
+        bam_path = BAM_DICT[wildcards.bam_id]
+        bam_size_mb = os.path.getsize(bam_path) / (1024 * 1024)
+        
+        # Base memory: ~500MB per GB of reference, min 1GB
+        ref_mem_mb = max(1000, int(ref_size_gb * 500))
+        
+        # Add memory for BAM processing: ~2MB per 100MB of BAM
+        bam_mem_mb = int(bam_size_mb * 0.02)
+        
+        # Add buffer for decompression and processing (~300MB)
+        base_mem = ref_mem_mb + bam_mem_mb + 300
+        
+        # Add 30% safety margin and scale with attempts
+        return int(base_mem * 1.3) * attempt
+    except:
+        # Fallback to conservative estimate
+        return 2000 * attempt
+
+def estimate_runtime_for_bam(wildcards, attempt=1):
+    """
+    Runtime estimate for mpileup on a single BAM.
+    Based on BOTH BAM file size AND reference genome size.
+    Empirical observation: ~5 minutes for 283MB BAM with 3GB reference
+    
+    Runtime depends on:
+    - BAM size: more reads to process
+    - Reference size: more positions to evaluate
+    """
+    try:
+        # Get BAM size in MB
+        bam_path = BAM_DICT[wildcards.bam_id]
+        bam_size_mb = os.path.getsize(bam_path) / (1024 * 1024)
+        
+        # Get reference size in GB
+        ref_size_gb = get_reference_size_gb()
+        
+        # Mpileup processes every position in the reference, checking BAM for coverage
+        # Time scales with: (BAM size) × (reference size)
+        # Empirical: 283MB BAM × 3GB ref = 5 minutes
+        # So: time ≈ (bam_mb × ref_gb) / (283 × 3) × 5
+        
+        baseline_product = 283 * 3  # 849 MB*GB from empirical test
+        baseline_time = 5  # minutes
+        
+        current_product = bam_size_mb * ref_size_gb
+        base_time = (current_product / baseline_product) * baseline_time
+        
+        # Ensure minimum time
+        base_time = max(10, int(base_time))
+        
+        # Add 100% safety margin (double the time) to handle variations
+        # in read depth, reference complexity, etc.
+        safe_time = base_time * 2
+        
+        # Scale with retry attempts
+        return int(safe_time) * attempt
+    except Exception as e:
+        # Fallback to conservative estimate
+        return 30 * attempt
+
 
 # limit the bam_id wildcard
 wildcard_constraints:
@@ -117,8 +189,8 @@ rule mpileup_bam:
         bam_id = "{bam_id}"
     threads: 1
     resources:
-        mem_mb = lambda wildcards, attempt: 4000 * attempt,
-        runtime = lambda wildcards, attempt: 120 * attempt
+        mem_mb = estimate_mem_mb_for_bam,
+        runtime = estimate_runtime_for_bam
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
