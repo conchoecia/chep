@@ -93,10 +93,27 @@ os.makedirs(f"{WORKDIR}/pileups",     exist_ok=True)
 #    base_time = max(60, int(num_bams * 0.5))  # ~30 seconds per BAM
 #    return base_time * attempt
 
+def get_chromosomes_from_checkpoint(wildcards):
+    """Get list of chromosomes from checkpoint output"""
+    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
+    chrom_files = glob.glob(f"{checkpoint_output}/*.txt")
+    chroms = [os.path.basename(f).replace('.txt', '') for f in chrom_files]
+    return chroms
+
+def get_split_bams_for_bam_id(wildcards):
+    """Get all split BAM files for a given bam_id"""
+    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
+    chroms = get_chromosomes_from_checkpoint(wildcards)
+    return expand(f"{WORKDIR}/split_bams/{wildcards.bam_id}.{{chrom}}.bam", chrom=chroms)
+
+def _all_split_bams(wc):
+    chroms = get_chromosomes_from_checkpoint(wc)
+    return [os.path.join(WORKDIR, "split_bams", f"{bid}.{c}.bam")
+            for bid in BAM_IDS for c in chroms]
+
 # limit the chromosome wildcard text to be A-z, 0-9, underscore, hyphen, and dot
 wildcard_constraints:
     chrom = r"[A-Za-z0-9_.-]+"
-
 
 def _all_chrom_txts(wildcards):
     # Wait for checkpoint; get its dynamic output dir
@@ -109,7 +126,7 @@ def _all_chrom_txts(wildcards):
 
 rule all:
     input:
-        expand(f"{WORKDIR}/split_bams/{bam_id}.{{chrom}}.bam", chrom=get_chromosomes_from_checkpoint)
+        _all_split_bams,
         #OUTPUT,
         #OUTPUT.replace(".txt", "_plot.png")
 
@@ -140,28 +157,18 @@ checkpoint get_chromosomes:
         ls {output.chroms_dir}/
         """
 
-def get_chromosomes_from_checkpoint(wildcards):
-    """Get list of chromosomes from checkpoint output"""
-    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
-    chrom_files = glob.glob(f"{checkpoint_output}/*.txt")
-    chroms = [os.path.basename(f).replace('.txt', '') for f in chrom_files]
-    return chroms
-
-def get_split_bams_for_bam_id(wildcards):
-    """Get all split BAM files for a given bam_id"""
-    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
-    chroms = get_chromosomes_from_checkpoint(wildcards)
-    return expand(f"{WORKDIR}/split_bams/{wildcards.bam_id}.{{chrom}}.bam", chrom=chroms)
-
 rule split_bam_all_chromosomes:
     """
     Split a single BAM file into per-chromosome BAMs (all chromosomes at once).
     Copy to local tmpdir for I/O efficiency - only copies BAM once!
     """
     input:
+        bam = lambda wc: BAM_DICT[wc.bam_id],
+        chroms_dir = lambda wc: checkpoints.get_chromosomes.get(**wc).output.chroms_dir
         chroms_dir = expand(f"{WORKDIR}/chromosomes/{chrom}.txt", chrom=get_chromosomes_from_checkpoint)
     output:
-        bams = expand(f"{WORKDIR}/split_bams/{{bam_id}}.{chrom}.bam", chrom=get_chromosomes_from_checkpoint)
+        lambda wc: [os.path.join(WORKDIR, "split_bams", f"{wc.bam_id}.{c}.bam")
+                    for c in get_chromosomes_from_checkpoint(wc)]
     params:
         bam_path = lambda wildcards: BAM_DICT[wildcards.bam_id],
         outdir = f"{WORKDIR}/split_bams",
