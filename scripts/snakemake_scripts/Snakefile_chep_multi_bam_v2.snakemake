@@ -139,7 +139,7 @@ rule merge_all_bams:
         # Create directory for input BAMs
         mkdir -p "$LOCAL_TMP/inputs"
         
-        # Copy all BAMs to local tmpdir and create list
+        # Copy all BAMs to local tmpdir with unique names and create list
         BAM_LIST="$LOCAL_TMP/bam_list.txt"
         counter=0
         for bam in {input.bams}; do
@@ -147,7 +147,8 @@ rule merge_all_bams:
             if [ $((counter % 100)) -eq 0 ]; then
                 echo "  Copied $counter BAMs..."
             fi
-            local_bam="$LOCAL_TMP/inputs/$(basename $bam)"
+            # Use counter to ensure unique filenames
+            local_bam="$LOCAL_TMP/inputs/bam_${{counter}}.bam"
             cp "$bam" "$local_bam"
             echo "$local_bam" >> "$BAM_LIST"
         done
