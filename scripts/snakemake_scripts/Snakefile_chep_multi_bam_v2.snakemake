@@ -161,7 +161,7 @@ rule split_bam_all_chromosomes:
     input:
         chroms_dir = expand(f"{WORKDIR}/chromosomes/{chrom}.txt", chrom=get_chromosomes_from_checkpoint)
     output:
-        bams = expand(f"{WORKDIR}/split_bams/{bam_id}.{{chrom}}.bam", chrom=get_chromosomes_from_checkpoint)
+        bams = expand(f"{WORKDIR}/split_bams/{{bam_id}}.{chrom}.bam", chrom=get_chromosomes_from_checkpoint)
     params:
         bam_path = lambda wildcards: BAM_DICT[wildcards.bam_id],
         outdir = f"{WORKDIR}/split_bams",
