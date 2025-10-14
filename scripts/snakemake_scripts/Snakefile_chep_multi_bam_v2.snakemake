@@ -43,55 +43,55 @@ os.makedirs(f"{WORKDIR}/split_bams",  exist_ok=True)
 os.makedirs(f"{WORKDIR}/merged_bams", exist_ok=True)
 os.makedirs(f"{WORKDIR}/pileups",     exist_ok=True)
 
-#def get_reference_size_gb():
-#    """Get reference genome file size in GB"""
-#    try:
-#        size_bytes = os.path.getsize(REF)
-#        return size_bytes / (1024 * 1024 * 1024)
-#    except:
-#        return GENOME_SIZE_GB
-#
-#def estimate_mem_mb_base(attempt=1):
-#    """Base memory estimate for mpileup based on reference size"""
-#    ref_size_gb = get_reference_size_gb()
-#    base_mem = max(4000, int(ref_size_gb * 2000) + 2000)
-#    return base_mem * attempt
-#
-#def estimate_mem_mb_split(wildcards, attempt=1):
-#    """Memory for splitting BAMs - relatively light"""
-#    return 2000 * attempt
-#
-#def estimate_mem_mb_merge(wildcards, input, attempt=1):
-#    """Memory for merging BAMs - scales with number of input files"""
-#    num_files = len(input)
-#    base_mem = max(4000, 2000 + num_files * 100)
-#    return min(base_mem * attempt, 32000)
-#
-#def estimate_mem_mb_mpileup(wildcards, attempt=1):
-#    """Memory for mpileup - based on reference size"""
-#    return estimate_mem_mb_base(attempt)
-#
-#def estimate_runtime_split(wildcards, attempt=1):
-#    """Runtime for splitting BAMs - depends on BAM size"""
-#    try:
-#        bam_path = BAM_DICT[wildcards.bam_id]
-#        size_mb = os.path.getsize(bam_path) / (1024 * 1024)
-#        base_time = max(20, int(size_mb * 0.05))  # ~3 seconds per MB
-#    except:
-#        base_time = 30
-#    return base_time * attempt
-#
-#def estimate_runtime_merge(wildcards, input, attempt=1):
-#    """Runtime for merging BAMs - scales with number of files"""
-#    num_files = len(input)
-#    base_time = max(30, int(num_files * 2))  # ~2 min per file
-#    return base_time * attempt
-#
-#def estimate_runtime_mpileup(wildcards, attempt=1):
-#    """Runtime for mpileup - depends on chromosome size and number of cells"""
-#    num_bams = len(BAMS)
-#    base_time = max(60, int(num_bams * 0.5))  # ~30 seconds per BAM
-#    return base_time * attempt
+def get_reference_size_gb():
+    """Get reference genome file size in GB"""
+    try:
+        size_bytes = os.path.getsize(REF)
+        return size_bytes / (1024 * 1024 * 1024)
+    except:
+        return GENOME_SIZE_GB
+
+def estimate_mem_mb_base(attempt=1):
+    """Base memory estimate for mpileup based on reference size"""
+    ref_size_gb = get_reference_size_gb()
+    base_mem = max(4000, int(ref_size_gb * 2000) + 2000)
+    return base_mem * attempt
+
+def estimate_mem_mb_split(wildcards, attempt=1):
+    """Memory for splitting BAMs - relatively light"""
+    return 2000 * attempt
+
+def estimate_mem_mb_merge(wildcards, input, attempt=1):
+    """Memory for merging BAMs - scales with number of input files"""
+    num_files = len(input)
+    base_mem = max(4000, 2000 + num_files * 100)
+    return min(base_mem * attempt, 32000)
+
+def estimate_mem_mb_mpileup(wildcards, attempt=1):
+    """Memory for mpileup - based on reference size"""
+    return estimate_mem_mb_base(attempt)
+
+def estimate_runtime_split(wildcards, attempt=1):
+    """Runtime for splitting BAMs - depends on BAM size"""
+    try:
+        bam_path = BAM_DICT[wildcards.bam_id]
+        size_mb = os.path.getsize(bam_path) / (1024 * 1024)
+        base_time = max(20, int(size_mb * 0.05))  # ~3 seconds per MB
+    except:
+        base_time = 30
+    return base_time * attempt
+
+def estimate_runtime_merge(wildcards, input, attempt=1):
+    """Runtime for merging BAMs - scales with number of files"""
+    num_files = len(input)
+    base_time = max(30, int(num_files * 2))  # ~2 min per file
+    return base_time * attempt
+
+def estimate_runtime_mpileup(wildcards, attempt=1):
+    """Runtime for mpileup - depends on chromosome size and number of cells"""
+    num_bams = len(BAMS)
+    base_time = max(60, int(num_bams * 0.5))  # ~30 seconds per BAM
+    return base_time * attempt
 
 def get_chromosomes_from_checkpoint(wildcards):
     """Get list of chromosomes from checkpoint output"""
