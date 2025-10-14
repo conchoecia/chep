@@ -171,13 +171,17 @@ rule split_bam_by_chromosome:
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
-        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_split_XXXXXX")
+        # Use a consistent tmpdir name based on bam_id so grouped jobs share it
+        LOCAL_TMP="$TMPDIR/chep_split_{wildcards.bam_id}"
+        mkdir -p "$LOCAL_TMP"
 
         echo "Splitting {wildcards.bam_id} for chromosome {wildcards.chrom}"
+        echo "Using tmpdir: $LOCAL_TMP"
 
         # Copy BAM to local tmpdir (only happens once per grouped job)
         LOCAL_BAM="$LOCAL_TMP/input.bam"
         if [ ! -f "$LOCAL_BAM" ]; then
+            echo "  Copying BAM to tmpdir (first chromosome for this BAM)"
             cp {input.bam} "$LOCAL_BAM"
             # Copy or create index
             if [ -f {input.bam}.bai ]; then
@@ -185,6 +189,8 @@ rule split_bam_by_chromosome:
             else
                 samtools index "$LOCAL_BAM"
             fi
+        else
+            echo "  BAM already in tmpdir, reusing"
         fi
 
         mkdir -p {params.outdir}
@@ -197,6 +203,8 @@ rule split_bam_by_chromosome:
         cp "$LOCAL_OUT" {output.bam}
 
         echo "Completed: {wildcards.bam_id}.{wildcards.chrom}"
+        echo "Tmpdir contents:"
+        ls -lh "$LOCAL_TMP"
         """
 
 def get_all_split_bams_for_chrom(wildcards):
