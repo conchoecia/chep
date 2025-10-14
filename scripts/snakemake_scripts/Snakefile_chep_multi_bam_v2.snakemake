@@ -37,11 +37,23 @@ with open(BAM_LIST) as f:
 BAM_IDS = [f"bam_{i:04d}" for i in range(len(BAMS))]
 BAM_DICT = dict(zip(BAM_IDS, BAMS))
 
+# Batch BAMs into groups of 10 for processing
+BATCH_SIZE = config.get("batch_size", 10)
+NUM_BATCHES = (len(BAMS) + BATCH_SIZE - 1) // BATCH_SIZE  # Ceiling division
+BATCH_IDS = [f"batch_{i:04d}" for i in range(NUM_BATCHES)]
+
+def get_bams_for_batch(batch_id):
+    """Get list of BAM files for a given batch"""
+    batch_num = int(batch_id.split("_")[1])
+    start_idx = batch_num * BATCH_SIZE
+    end_idx = min(start_idx + BATCH_SIZE, len(BAMS))
+    return BAMS[start_idx:end_idx]
+
 # Create work directories
 os.makedirs(WORKDIR,                  exist_ok=True)
 os.makedirs(f"{WORKDIR}/split_bams",  exist_ok=True)
 os.makedirs(f"{WORKDIR}/merged_bams", exist_ok=True)
-os.makedirs(f"{WORKDIR}/pileups",     exist_ok=True)
+os.makedirs(f"{WORKDIR}/batch_pileups", exist_ok=True)
 
 def get_reference_size_gb():
     """Get reference genome file size in GB"""
@@ -168,60 +180,201 @@ def estimate_runtime_for_bam(wildcards, attempt=1):
 
 # limit the bam_id wildcard
 wildcard_constraints:
-    bam_id = r"bam_\d+"
+    bam_id = r"bam_\d+",
+    batch_id = r"batch_\d+"
 
 rule all:
     input:
-        expand(WORKDIR + "/pileups/{bam_id}.pileup.gz", bam_id=BAM_IDS)
+        #OUTPUT
+        expand(WORKDIR + "/batch_pileups/{batch_id}.pileup.gz", batch_id=BATCH_IDS)
 
-rule mpileup_bam:
+rule mpileup_batch:
     """
-    Run samtools mpileup on a single BAM file.
-    Output gzipped pileup text.
-    Uses local tmpdir for I/O efficiency.
+    Run samtools mpileup on a batch of ~10 BAMs.
+    Saves gzipped pileup output for potential reuse.
+    Uses -b option with file list for proper multi-BAM mpileup.
+    Copies BAMs to local tmpdir with unique names to avoid collisions.
     """
     input:
-        bam = lambda wc: BAM_DICT[wc.bam_id]
+        bams = lambda wc: get_bams_for_batch(wc.batch_id)
     output:
-        pileup = WORKDIR + "/pileups/{bam_id}.pileup.gz"
+        pileup = WORKDIR + "/batch_pileups/{batch_id}.pileup.gz"
     params:
         ref = REF,
-        bam_id = "{bam_id}"
+        batch_id = "{batch_id}",
+        num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id))
     threads: 1
     resources:
-        mem_mb = estimate_mem_mb_for_bam,
-        runtime = estimate_runtime_for_bam
+        mem_mb = lambda wildcards, attempt: max(4000, BATCH_SIZE * 500) * attempt,
+        runtime = lambda wildcards, attempt: 30 * attempt  # ~30 minutes per batch
     shell:
         """
+        echo "Processing {params.batch_id} with {params.num_bams} BAMs"
+        
         TMPDIR=${{TMPDIR:-/tmp}}
-        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_mpileup_XXXXXX")
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_batch_mpileup_XXXXXX")
+        mkdir -p "$LOCAL_TMP/bams"
         
-        echo "Running mpileup on {params.bam_id}"
+        # Copy BAMs to local tmpdir with unique names to avoid basename collisions
+        BAM_LIST="$LOCAL_TMP/bam_list.txt"
+        counter=0
+        for bam in {input.bams}; do
+            counter=$((counter + 1))
+            LOCAL_BAM="$LOCAL_TMP/bams/bam_${{counter}}.bam"
+            echo "  Copying BAM $counter to tmpdir..."
+            cp "$bam" "$LOCAL_BAM"
+            
+            # Copy or create index
+            if [ -f "${{bam}}.bai" ]; then
+                cp "${{bam}}.bai" "${{LOCAL_BAM}}.bai"
+            else
+                echo "  Creating index for BAM $counter..."
+                samtools index "$LOCAL_BAM"
+            fi
+            
+            # Add to BAM list
+            echo "$LOCAL_BAM" >> "$BAM_LIST"
+        done
         
-        # Copy BAM to local tmpdir
-        LOCAL_BAM="$LOCAL_TMP/input.bam"
-        cp {input.bam} "$LOCAL_BAM"
-        
-        # Copy or create index
-        if [ -f {input.bam}.bai ]; then
-            cp {input.bam}.bai "$LOCAL_BAM.bai"
-        else
-            samtools index "$LOCAL_BAM"
-        fi
-        
-        # Run mpileup and gzip to tmpdir
-        LOCAL_OUT="$LOCAL_TMP/output.pileup.gz"
-        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} "$LOCAL_BAM" | gzip > "$LOCAL_OUT"
-        
-        # Copy result back
-        mkdir -p $(dirname {output.pileup})
-        cp "$LOCAL_OUT" {output.pileup}
+        # Run mpileup with -b option for multi-BAM processing
+        echo "Running mpileup on {params.num_bams} BAMs in {params.batch_id}..."
+        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} -b "$BAM_LIST" | gzip > {output.pileup}
         
         # Cleanup
         rm -rf "$LOCAL_TMP"
         
-        echo "Completed mpileup: {params.bam_id}"
+        echo "Completed {params.batch_id}: {output.pileup}"
         """
+
+rule combine_batches_to_chep:
+    """
+    Combine all batch pileup files and process with chep_pileup_to_array.
+    This gives us reusable batch pileup files while still producing the final output.
+    """
+    input:
+        pileups = expand(WORKDIR + "/batch_pileups/{batch_id}.pileup.gz", batch_id=BATCH_IDS)
+    output:
+        OUTPUT
+    params:
+        num_batches = NUM_BATCHES
+    threads: 1
+    resources:
+        mem_mb = lambda wildcards, attempt: 8000 * attempt,
+        runtime = lambda wildcards, attempt: 60 * attempt
+    shell:
+        """
+        echo "Combining {params.num_batches} batch pileup files and processing with CHEP"
+        
+        # Concatenate all gzipped batch pileups and pipe to chep
+        zcat {input.pileups} | {CHEP_PILEUP_TO_ARRAY} > {output}
+        
+        echo "CHEP processing complete: {output}"
+        """
+#        """
+
+# Old single-job approach - kept for reference
+#rule mpileup_all_bams_to_chep:
+#    """
+#    Run samtools mpileup on ALL BAMs in parallel, then pipe combined output to chep_pileup_to_array.
+#    This avoids storing 768 × 750MB = ~576GB of intermediate pileup files.
+#    
+#    Strategy:
+#    - Use GNU parallel to run mpileup on all BAMs simultaneously
+#    - Each mpileup outputs to stdout (no disk writes)
+#    - All outputs concatenated and piped to chep_pileup_to_array
+#    - Only the final processed output is saved
+#    """
+#    input:
+#        bams = BAMS
+#    output:
+#        OUTPUT
+#    params:
+#        ref = REF,
+#        num_bams = len(BAMS)
+#    threads: workflow.cores  # Use all available cores
+#    resources:
+#        mem_mb = lambda wildcards, attempt: max(8000, len(BAMS) * 50) * attempt,
+#        runtime = lambda wildcards, attempt: 180 * attempt  # 3 hours for processing all BAMs
+#    shell:
+#        """
+#        echo "Processing {params.num_bams} BAMs with parallel mpileup -> chep pipeline"
+#        
+#        # Create a file list for parallel processing
+#        TMPDIR=${{TMPDIR:-/tmp}}
+#        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_parallel_mpileup_XXXXXX")
+#        BAM_LIST="$LOCAL_TMP/bam_list.txt"
+#        
+#        # Write BAM paths to file
+#        for bam in {input.bams}; do
+#            echo "$bam" >> "$BAM_LIST"
+#        done
+#        
+#        echo "Running parallel mpileup on {params.num_bams} BAMs..."
+#        
+#        # Use GNU parallel to run mpileup on all BAMs, pipe combined output to chep
+#        # -j {threads}: use all available threads
+#        # --pipe: split input (BAM list) across jobs
+#        # Each job runs: samtools mpileup on one BAM, outputs to stdout
+#        # All outputs concatenated and piped to chep_pileup_to_array
+#        cat "$BAM_LIST" | parallel -j {threads} \
+#            'samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} {{}}' \
+#            | {CHEP_PILEUP_TO_ARRAY} > {output}
+#        
+#        # Cleanup
+#        rm -rf "$LOCAL_TMP"
+#        
+#        echo "Completed CHEP processing: {output}"
+#        """
+
+# Keep the old rule commented out for reference
+#rule mpileup_bam:
+#    """
+#    Run samtools mpileup on a single BAM file.
+#    Output gzipped pileup text.
+#    Uses local tmpdir for I/O efficiency.
+#    """
+#    input:
+#        bam = lambda wc: BAM_DICT[wc.bam_id]
+#    output:
+#        pileup = WORKDIR + "/pileups/{bam_id}.pileup.gz"
+#    params:
+#        ref = REF,
+#        bam_id = "{bam_id}"
+#    threads: 1
+#    resources:
+#        mem_mb = estimate_mem_mb_for_bam,
+#        runtime = estimate_runtime_for_bam
+#    shell:
+#        """
+#        TMPDIR=${{TMPDIR:-/tmp}}
+#        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_mpileup_XXXXXX")
+#        
+#        echo "Running mpileup on {params.bam_id}"
+#        
+#        # Copy BAM to local tmpdir
+#        LOCAL_BAM="$LOCAL_TMP/input.bam"
+#        cp {input.bam} "$LOCAL_BAM"
+# 
+#        # Copy or create index
+#        if [ -f {input.bam}.bai ]; then
+#            cp {input.bam}.bai "$LOCAL_BAM.bai"
+#        else
+#            samtools index "$LOCAL_BAM"
+#        fi
+#        
+#        # Run mpileup and gzip to tmpdir
+#        LOCAL_OUT="$LOCAL_TMP/output.pileup.gz"
+#        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} "$LOCAL_BAM" | gzip > "$LOCAL_OUT"
+#        
+#        # Copy result back
+#        mkdir -p $(dirname {output.pileup})
+#        cp "$LOCAL_OUT" {output.pileup}
+#        
+#        # Cleanup
+#        rm -rf "$LOCAL_TMP"
+#        
+#        echo "Completed mpileup: {params.bam_id}"
+#        """
 
 ##rule merge_all_bams:
 #    """
