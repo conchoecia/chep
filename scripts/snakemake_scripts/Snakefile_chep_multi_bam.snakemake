@@ -110,7 +110,7 @@ rule process_single_bam:
     """
     Process a single BAM file using local tmpdir for I/O efficiency.
     Copies BAM and index to local tmpdir, runs mpileup, then cleans up.
-    
+
     Resources are dynamically allocated based on BAM file size:
     - Memory: ~1.5x BAM size (empirically validated)
     - Runtime: ~0.046 min/MB of BAM (from 283MB→13min benchmark)
@@ -164,7 +164,7 @@ rule merge_all:
     Resources scale with number of input files.
     """
     input:
-        expand(f"{WORKDIR}/{{bam_id}}.chep3d.txt", bam_id=BAM_IDS)
+        expand(f"{WORKDIR}/{bam_id}.chep3d.txt", bam_id = BAM_IDS)
     output:
         OUTPUT
     threads: 1

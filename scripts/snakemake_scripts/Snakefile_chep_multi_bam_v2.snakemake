@@ -1,0 +1,328 @@
+"""
+Snakemake workflow to process multiple BAM files for CHEP analysis.
+Strategy: Split by chromosome, merge per-chromosome BAMs, run mpileup per chromosome, merge results.
+
+Usage:
+    snakemake -s Snakefile_chep_multi_bam_v2.snakemake \
+        --config ref=reference.fa bam_list=bam_list.txt output=chep_3D.txt \
+        --executor slurm --jobs 100
+"""
+
+import os
+import gzip
+import glob
+from pathlib import Path
+
+# Get config parameters
+REF = config.get("ref", "reference.fa")
+BAM_LIST = config.get("bam_list", "bam_list.txt")
+OUTPUT = config.get("output", "chep_3D.txt")
+WORKDIR = config.get("workdir", "chep_work")
+MIN_CHROM_SIZE = config.get("min_chrom_size_mbp", 1.0) * 1_000_000  # Default 1 Mbp
+GENOME_SIZE_GB = config.get("genome_size_gb", 3.0)
+
+# Get the directory containing this Snakefile
+SNAKEFILE_DIR = Path(workflow.basedir)
+CHEP_BIN = SNAKEFILE_DIR.parent.parent / "bin"
+CHEP_SCRIPTS = SNAKEFILE_DIR.parent
+
+# Path to executables
+CHEP_PILEUP_TO_ARRAY = CHEP_BIN / "chep_pileup_to_array"
+CHEP_PLOT = CHEP_BIN / "chep_plot"
+
+# Read BAM file list
+with open(BAM_LIST) as f:
+    BAMS = [line.strip() for line in f if line.strip()]
+
+BAM_IDS = [f"bam_{i:04d}" for i in range(len(BAMS))]
+BAM_DICT = dict(zip(BAM_IDS, BAMS))
+
+# Create work directories
+os.makedirs(WORKDIR, exist_ok=True)
+os.makedirs(f"{WORKDIR}/split_bams", exist_ok=True)
+os.makedirs(f"{WORKDIR}/merged_bams", exist_ok=True)
+os.makedirs(f"{WORKDIR}/pileups", exist_ok=True)
+
+def get_reference_size_gb():
+    """Get reference genome file size in GB"""
+    try:
+        size_bytes = os.path.getsize(REF)
+        return size_bytes / (1024 * 1024 * 1024)
+    except:
+        return GENOME_SIZE_GB
+
+def estimate_mem_mb_base(attempt=1):
+    """Base memory estimate for mpileup based on reference size"""
+    ref_size_gb = get_reference_size_gb()
+    base_mem = max(4000, int(ref_size_gb * 2000) + 2000)
+    return base_mem * attempt
+
+def estimate_mem_mb_split(wildcards, attempt=1):
+    """Memory for splitting BAMs - relatively light"""
+    return 2000 * attempt
+
+def estimate_mem_mb_merge(wildcards, input, attempt=1):
+    """Memory for merging BAMs - scales with number of input files"""
+    num_files = len(input)
+    base_mem = max(4000, 2000 + num_files * 100)
+    return min(base_mem * attempt, 32000)
+
+def estimate_mem_mb_mpileup(wildcards, attempt=1):
+    """Memory for mpileup - based on reference size"""
+    return estimate_mem_mb_base(attempt)
+
+def estimate_runtime_split(wildcards, attempt=1):
+    """Runtime for splitting BAMs - depends on BAM size"""
+    try:
+        bam_path = BAM_DICT[wildcards.bam_id]
+        size_mb = os.path.getsize(bam_path) / (1024 * 1024)
+        base_time = max(20, int(size_mb * 0.05))  # ~3 seconds per MB
+    except:
+        base_time = 30
+    return base_time * attempt
+
+def estimate_runtime_merge(wildcards, input, attempt=1):
+    """Runtime for merging BAMs - scales with number of files"""
+    num_files = len(input)
+    base_time = max(30, int(num_files * 2))  # ~2 min per file
+    return base_time * attempt
+
+def estimate_runtime_mpileup(wildcards, attempt=1):
+    """Runtime for mpileup - depends on chromosome size and number of cells"""
+    num_bams = len(BAMS)
+    base_time = max(60, int(num_bams * 0.5))  # ~30 seconds per BAM
+    return base_time * attempt
+
+checkpoint get_chromosomes:
+    """
+    Copy reference .fai and identify chromosomes >= min size.
+    Creates one output file per chromosome so downstream rules can use {chrom} wildcard.
+    """
+    input:
+        fai = REF + ".fai"
+    output:
+        fai = f"{WORKDIR}/genome.fai",
+        chroms_dir = directory(f"{WORKDIR}/chromosomes")
+    shell:
+        """
+        cp {input.fai} {output.fai}
+        
+        # Create output directory
+        mkdir -p {output.chroms_dir}
+        
+        # Extract chromosomes >= min size and create one file per chromosome
+        awk -v minsize={MIN_CHROM_SIZE} '$2 >= minsize {{print $1}}' {output.fai} | while read chrom; do
+            echo "Selected: $chrom"
+            touch {output.chroms_dir}/$chrom.txt
+        done
+        
+        echo "Chromosome selection complete"
+        ls {output.chroms_dir}/
+        """
+
+def get_chromosomes_from_checkpoint(wildcards):
+    """Get list of chromosomes from checkpoint output"""
+    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
+    chrom_files = glob.glob(f"{checkpoint_output}/*.txt")
+    chroms = [os.path.basename(f).replace('.txt', '') for f in chrom_files]
+    return chroms
+
+def get_split_bams_for_bam_id(wildcards):
+    """Get all split BAM files for a given bam_id"""
+    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
+    chroms = get_chromosomes_from_checkpoint(wildcards)
+    return expand(f"{WORKDIR}/split_bams/{wildcards.bam_id}.{{chrom}}.bam", chrom=chroms)
+
+rule split_bam_all_chromosomes:
+    """
+    Split a single BAM file into per-chromosome BAMs (all chromosomes at once).
+    Copy to local tmpdir for I/O efficiency - only copies BAM once!
+    """
+    input:
+        chroms_dir = f"{WORKDIR}/chromosomes"
+    output:
+        bams = get_split_bams_for_bam_id
+    params:
+        bam_path = lambda wildcards: BAM_DICT[wildcards.bam_id],
+        outdir = f"{WORKDIR}/split_bams",
+        bam_id = "{bam_id}"
+    threads: 2
+    resources:
+        mem_mb = estimate_mem_mb_split,
+        runtime = estimate_runtime_split
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d $TMPDIR/chep_split_XXXXXX)
+        
+        echo "Splitting {params.bam_path} for all chromosomes"
+        
+        # Copy BAM to local tmpdir
+        LOCAL_BAM=$LOCAL_TMP/input.bam
+        cp {params.bam_path} $LOCAL_BAM
+        
+        # Copy index if exists, otherwise create it
+        if [ -f {params.bam_path}.bai ]; then
+            cp {params.bam_path}.bai $LOCAL_BAM.bai
+        else
+            samtools index $LOCAL_BAM
+        fi
+        
+        # Create output directory for split BAMs
+        mkdir -p $LOCAL_TMP/outputs
+        mkdir -p {params.outdir}
+        
+        # Split into per-chromosome BAMs
+        for chrom_file in {input.chroms_dir}/*.txt; do
+            chrom=$(basename $chrom_file .txt)
+            echo "  Extracting $chrom"
+            samtools view -@ {threads} -b $LOCAL_BAM "$chrom" > $LOCAL_TMP/outputs/{params.bam_id}.$chrom.bam
+        done
+        
+        # Copy all results back
+        cp $LOCAL_TMP/outputs/* {params.outdir}/
+        
+        # Cleanup
+        rm -rf $LOCAL_TMP
+        
+        echo "Completed split: {params.bam_id} (all chromosomes)"
+        """
+
+rule merge_chromosome_bams:
+    """
+    Merge all per-chromosome BAMs from all samples into one BAM per chromosome.
+    """
+    input:
+        split_bams = expand(f"{WORKDIR}/split_bams/{bam_id}.{{chrom}}.bam", bam_id=BAM_IDS)
+    output:
+        bam = f"{WORKDIR}/merged_bams/{{chrom}}.bam",
+        bai = f"{WORKDIR}/merged_bams/{{chrom}}.bam.bai"
+    threads: 4
+    resources:
+        mem_mb = estimate_mem_mb_merge,
+        runtime = estimate_runtime_merge
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d $TMPDIR/chep_merge_XXXXXX)
+        
+        echo "Merging {wildcards.chrom} from {len(input.split_bams)} BAMs"
+        
+        # Copy all input BAMs to local tmpdir
+        mkdir -p $LOCAL_TMP/inputs
+        INPUT_LIST=$LOCAL_TMP/input_list.txt
+        for bam in {input.split_bams}; do
+            local_bam=$LOCAL_TMP/inputs/$(basename $bam)
+            cp $bam $local_bam
+            echo $local_bam >> $INPUT_LIST
+        done
+        
+        # Merge
+        LOCAL_OUT=$LOCAL_TMP/merged.bam
+        samtools merge -@ {threads} -b $INPUT_LIST $LOCAL_OUT
+        
+        # Index
+        samtools index $LOCAL_OUT
+        
+        # Copy results back
+        cp $LOCAL_OUT {output.bam}
+        cp $LOCAL_OUT.bai {output.bai}
+        
+        # Cleanup
+        rm -rf $LOCAL_TMP
+        
+        echo "Completed merge: {wildcards.chrom}"
+        """
+
+rule mpileup_chromosome:
+    """
+    Run samtools mpileup on merged chromosome BAM.
+    Output gzipped pileup text.
+    """
+    input:
+        bam = f"{WORKDIR}/merged_bams/{chrom}.bam",
+        bai = f"{WORKDIR}/merged_bams/{chrom}.bam.bai"
+    output:
+        f"{WORKDIR}/pileups/{chrom}.pileup.gz"
+    params:
+        ref = REF
+    threads: 1
+    resources:
+        mem_mb = estimate_mem_mb_mpileup,
+        runtime = estimate_runtime_mpileup
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d $TMPDIR/chep_mpileup_XXXXXX)
+        
+        echo "Running mpileup on {wildcards.chrom}"
+        
+        # Copy BAM and index to local tmpdir
+        LOCAL_BAM=$LOCAL_TMP/input.bam
+        cp {input.bam} $LOCAL_BAM
+        cp {input.bai} $LOCAL_BAM.bai
+        
+        # Run mpileup and gzip
+        LOCAL_OUT=$LOCAL_TMP/output.pileup.gz
+        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} $LOCAL_BAM | gzip > $LOCAL_OUT
+        
+        # Copy result back
+        cp $LOCAL_OUT {output}
+        
+        # Cleanup
+        rm -rf $LOCAL_TMP
+        
+        echo "Completed mpileup: {wildcards.chrom}"
+        """
+
+def get_all_pileups(wildcards):
+    """Get all pileup files after checkpoint resolves"""
+    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms
+    with open(checkpoint_output) as f:
+        chroms = [line.strip() for line in f]
+    return expand(f"{WORKDIR}/pileups/{{chrom}}.pileup.gz", chrom=chroms)
+
+rule combine_and_process:
+    """
+    Combine all chromosome pileups and process with chep_pileup_to_array.
+    """
+    input:
+        get_all_pileups
+    output:
+        OUTPUT
+    threads: 1
+    resources:
+        mem_mb = 8000,
+        runtime = 60
+    shell:
+        """
+        echo "Combining {len(input)} pileup files and processing with CHEP"
+        
+        # Concatenate all gzipped pileups and pipe to chep
+        zcat {input} | {CHEP_PILEUP_TO_ARRAY} > {output}
+        
+        echo "CHEP processing complete: {output}"
+        """
+
+rule plot_results:
+    """
+    Generate CHEP plots from the processed data.
+    """
+    input:
+        OUTPUT
+    output:
+        OUTPUT.replace(".txt", "_plot.png")
+    shell:
+        """
+        {CHEP_PLOT} -f {input} -x 0 -X 200 -o {output}
+        """
+
+rule all:
+    input:
+        OUTPUT,
+        OUTPUT.replace(".txt", "_plot.png")
+
+rule clean:
+    """Clean up intermediate files"""
+    shell:
+        f"rm -rf {WORKDIR}"
