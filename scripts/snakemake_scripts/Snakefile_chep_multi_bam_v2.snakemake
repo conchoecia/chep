@@ -109,7 +109,7 @@ def _all_chrom_txts(wildcards):
 
 rule all:
     input:
-        _all_chrom_txts
+        expand(f"{WORKDIR}/split_bams/{bam_id}.{{chrom}}.bam", chrom=get_chromosomes_from_checkpoint)
         #OUTPUT,
         #OUTPUT.replace(".txt", "_plot.png")
 
@@ -140,74 +140,74 @@ checkpoint get_chromosomes:
         ls {output.chroms_dir}/
         """
 
-#def get_chromosomes_from_checkpoint(wildcards):
-#    """Get list of chromosomes from checkpoint output"""
-#    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
-#    chrom_files = glob.glob(f"{checkpoint_output}/*.txt")
-#    chroms = [os.path.basename(f).replace('.txt', '') for f in chrom_files]
-#    return chroms
-#
-#def get_split_bams_for_bam_id(wildcards):
-#    """Get all split BAM files for a given bam_id"""
-#    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
-#    chroms = get_chromosomes_from_checkpoint(wildcards)
-#    return expand(f"{WORKDIR}/split_bams/{wildcards.bam_id}.{{chrom}}.bam", chrom=chroms)
-#
-#rule split_bam_all_chromosomes:
-#    """
-#    Split a single BAM file into per-chromosome BAMs (all chromosomes at once).
-#    Copy to local tmpdir for I/O efficiency - only copies BAM once!
-#    """
-#    input:
-#        chroms_dir = expand(f"{WORKDIR}/chromosomes/{chrom}.txt", chrom=get_chromosomes_from_checkpoint)
-#    output:
-#        bams = expand(f"{WORKDIR}/split_bams/{bam_id}.{{chrom}}.bam", chrom=get_chromosomes_from_checkpoint)
-#    params:
-#        bam_path = lambda wildcards: BAM_DICT[wildcards.bam_id],
-#        outdir = f"{WORKDIR}/split_bams",
-#        bam_id = "{bam_id}"
-#    threads: 2
-#    resources:
-#        mem_mb = estimate_mem_mb_split,
-#        runtime = estimate_runtime_split
-#    shell:
-#        """
-#        TMPDIR=${{TMPDIR:-/tmp}}
-#        LOCAL_TMP=$(mktemp -d $TMPDIR/chep_split_XXXXXX)
-#
-#        echo "Splitting {params.bam_path} for all chromosomes"
-#
-#        # Copy BAM to local tmpdir
-#        LOCAL_BAM=$LOCAL_TMP/input.bam
-#        cp {params.bam_path} $LOCAL_BAM
-#
-#        # Copy index if exists, otherwise create it
-#        if [ -f {params.bam_path}.bai ]; then
-#            cp {params.bam_path}.bai $LOCAL_BAM.bai
-#        else
-#            samtools index $LOCAL_BAM
-#        fi
-#        
-#        # Create output directory for split BAMs
-#        mkdir -p $LOCAL_TMP/outputs
-#        mkdir -p {params.outdir}
-#        
-#        # Split into per-chromosome BAMs
-#        for chrom_file in {input.chroms_dir}/*.txt; do
-#            chrom=$(basename $chrom_file .txt)
-#            echo "  Extracting $chrom"
-#            samtools view -@ {threads} -b $LOCAL_BAM "$chrom" > $LOCAL_TMP/outputs/{params.bam_id}.$chrom.bam
-#        done
-#        
-#        # Copy all results back
-#        cp $LOCAL_TMP/outputs/* {params.outdir}/
-#        
-#        # Cleanup
-#        rm -rf $LOCAL_TMP
-#        
-#        echo "Completed split: {params.bam_id} (all chromosomes)"
-#        """
-#
+def get_chromosomes_from_checkpoint(wildcards):
+    """Get list of chromosomes from checkpoint output"""
+    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
+    chrom_files = glob.glob(f"{checkpoint_output}/*.txt")
+    chroms = [os.path.basename(f).replace('.txt', '') for f in chrom_files]
+    return chroms
+
+def get_split_bams_for_bam_id(wildcards):
+    """Get all split BAM files for a given bam_id"""
+    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
+    chroms = get_chromosomes_from_checkpoint(wildcards)
+    return expand(f"{WORKDIR}/split_bams/{wildcards.bam_id}.{{chrom}}.bam", chrom=chroms)
+
+rule split_bam_all_chromosomes:
+    """
+    Split a single BAM file into per-chromosome BAMs (all chromosomes at once).
+    Copy to local tmpdir for I/O efficiency - only copies BAM once!
+    """
+    input:
+        chroms_dir = expand(f"{WORKDIR}/chromosomes/{chrom}.txt", chrom=get_chromosomes_from_checkpoint)
+    output:
+        bams = expand(f"{WORKDIR}/split_bams/{bam_id}.{{chrom}}.bam", chrom=get_chromosomes_from_checkpoint)
+    params:
+        bam_path = lambda wildcards: BAM_DICT[wildcards.bam_id],
+        outdir = f"{WORKDIR}/split_bams",
+        bam_id = "{bam_id}"
+    threads: 2
+    resources:
+        mem_mb = estimate_mem_mb_split,
+        runtime = estimate_runtime_split
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d $TMPDIR/chep_split_XXXXXX)
+
+        echo "Splitting {params.bam_path} for all chromosomes"
+
+        # Copy BAM to local tmpdir
+        LOCAL_BAM=$LOCAL_TMP/input.bam
+        cp {params.bam_path} $LOCAL_BAM
+
+        # Copy index if exists, otherwise create it
+        if [ -f {params.bam_path}.bai ]; then
+            cp {params.bam_path}.bai $LOCAL_BAM.bai
+        else
+            samtools index $LOCAL_BAM
+        fi
+        
+        # Create output directory for split BAMs
+        mkdir -p $LOCAL_TMP/outputs
+        mkdir -p {params.outdir}
+        
+        # Split into per-chromosome BAMs
+        for chrom_file in {input.chroms_dir}/*.txt; do
+            chrom=$(basename $chrom_file .txt)
+            echo "  Extracting $chrom"
+            samtools view -@ {threads} -b $LOCAL_BAM "$chrom" > $LOCAL_TMP/outputs/{params.bam_id}.$chrom.bam
+        done
+        
+        # Copy all results back
+        cp $LOCAL_TMP/outputs/* {params.outdir}/
+        
+        # Cleanup
+        rm -rf $LOCAL_TMP
+        
+        echo "Completed split: {params.bam_id} (all chromosomes)"
+        """
+
 #rule merge_chromosome_bams:
 #    """
 #    Merge all per-chromosome BAMs from all samples into one BAM per chromosome.
