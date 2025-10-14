@@ -150,59 +150,52 @@ checkpoint get_chromosomes:
 
 rule split_bam_by_chromosome:
     """
-    Split a single BAM file into per-chromosome BAMs (all chromosomes at once).
-    Copy to local tmpdir for I/O efficiency - only copies BAM once!
-    
-    This rule will be run once per bam_id. The output BAMs are determined by
-    examining which chromosomes were created by the checkpoint.
-    Creates a flag file to mark completion, and the actual BAM files.
+    Split ONE BAM file by ONE chromosome.
+    Uses checkpoint to know which chromosomes exist.
+    Uses group directive to process all chromosomes for a BAM in one job.
     """
     input:
         bam = lambda wc: BAM_DICT[wc.bam_id],
-        chrom_files = get_chrom_files_for_split
+        chrom_marker = WORKDIR + "/chromosomes/{chrom}.txt"
     output:
-        touch(WORKDIR + "/split_bams/{bam_id}.done")
+        bam =    WORKDIR + "/split_bams/{bam_id}.{chrom}.bam"
     params:
-        outdir = WORKDIR + "/split_bams",
-        bam_id = "{bam_id}"
-    threads: 2
+        outdir = WORKDIR + "/split_bams"
+    threads: 1
     resources:
         mem_mb  = estimate_mem_mb_split,
         runtime = estimate_runtime_split
+    group: "split_{bam_id}"
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
         LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_split_XXXXXX")
 
-        echo "Splitting {params.bam_id} for all chromosomes"
+        echo "Splitting {wildcards.bam_id} for chromosome {wildcards.chrom}"
 
-        # Stage BAM + index
+        # Copy BAM to local tmpdir (only happens once per grouped job)
         LOCAL_BAM="$LOCAL_TMP/input.bam"
-        cp {input.bam} "$LOCAL_BAM"
-        if [ -f {input.bam}.bai ]; then
-            cp {input.bam}.bai "$LOCAL_BAM.bai"
-        else
-            samtools index "$LOCAL_BAM"
+        if [ ! -f "$LOCAL_BAM" ]; then
+            cp {input.bam} "$LOCAL_BAM"
+            # Copy or create index
+            if [ -f {input.bam}.bai ]; then
+                cp {input.bam}.bai "$LOCAL_BAM.bai"
+            else
+                samtools index "$LOCAL_BAM"
+            fi
         fi
 
-        mkdir -p "$LOCAL_TMP/outputs" {params.outdir}
+        mkdir -p {params.outdir}
 
-        # Loop over chromosome markers and extract each one
-        for chrom_file in {input.chrom_files}; do
-            chrom=$(basename "$chrom_file" .txt)
-            echo "  Extracting $chrom"
-            samtools view -@ {threads} -b "$LOCAL_BAM" "$chrom" > "$LOCAL_TMP/outputs/{params.bam_id}.$chrom.bam"
-        done
+        # Extract this chromosome to tmpdir
+        LOCAL_OUT="$LOCAL_TMP/{wildcards.bam_id}.{wildcards.chrom}.bam"
+        samtools view -@ {threads} -b "$LOCAL_BAM" "{wildcards.chrom}" > "$LOCAL_OUT"
 
-        # Copy all results back
-        cp "$LOCAL_TMP/outputs/"*.bam {params.outdir}/
+        # Copy result back to working dir
+        cp "$LOCAL_OUT" {output.bam}
 
-        rm -rf "$LOCAL_TMP"
-        
-        echo "Completed split: {params.bam_id} (all chromosomes)"
-        """
-
-def get_all_split_bams_for_chrom(wildcards):
+        echo "Completed: {wildcards.bam_id}.{wildcards.chrom}"
+        """def get_all_split_bams_for_chrom(wildcards):
     """Get all split BAMs across all samples for one chromosome"""
     # Trigger checkpoint evaluation
     checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
