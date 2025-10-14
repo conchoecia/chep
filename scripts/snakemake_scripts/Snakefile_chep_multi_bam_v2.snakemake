@@ -108,12 +108,13 @@ def get_chrom_files_for_split(wildcards):
 
 def _all_split_bams(wc):
     chroms = get_chromosomes_from_checkpoint(wc)
-    return [os.path.join(WORKDIR, "split_bams", bid + "." + c + ".bam")
+    return [os.path.join(WORKDIR, "split_bams", bid + "__" + c + ".bam")
             for bid in BAM_IDS for c in chroms]
 
 # limit the chromosome wildcard text to be A-z, 0-9, underscore, hyphen, and dot
 wildcard_constraints:
-    chrom = r"[A-Za-z0-9_.-]+"
+    chrom = r"[A-Za-z0-9_.-]+",
+    bam_id = r"bam_\d+"
 
 rule all:
     input:
@@ -153,12 +154,13 @@ rule split_bam_by_chromosome:
     Split ONE BAM file by ONE chromosome.
     Uses checkpoint to know which chromosomes exist.
     Uses group directive to process all chromosomes for a BAM in one job.
+    Uses __ as separator to avoid conflicts with dots in chromosome names.
     """
     input:
         bam = lambda wc: BAM_DICT[wc.bam_id],
         chrom_marker = WORKDIR + "/chromosomes/{chrom}.txt"
     output:
-        bam =    WORKDIR + "/split_bams/{bam_id}.{chrom}.bam"
+        bam = WORKDIR + "/split_bams/{bam_id}__{chrom}.bam"
     params:
         outdir = WORKDIR + "/split_bams"
     threads: 1
@@ -188,7 +190,7 @@ rule split_bam_by_chromosome:
         mkdir -p {params.outdir}
 
         # Extract this chromosome to tmpdir
-        LOCAL_OUT="$LOCAL_TMP/{wildcards.bam_id}.{wildcards.chrom}.bam"
+        LOCAL_OUT="$LOCAL_TMP/{wildcards.bam_id}__{wildcards.chrom}.bam"
         samtools view -@ {threads} -b "$LOCAL_BAM" "{wildcards.chrom}" > "$LOCAL_OUT"
 
         # Copy result back to working dir
@@ -202,7 +204,7 @@ def get_all_split_bams_for_chrom(wildcards):
     # Trigger checkpoint evaluation
     checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
     # Return all split BAMs for this chromosome
-    return expand(WORKDIR + "/split_bams/{bam_id}." + wildcards.chrom + ".bam", bam_id=BAM_IDS)
+    return expand(WORKDIR + "/split_bams/{bam_id}__" + wildcards.chrom + ".bam", bam_id=BAM_IDS)
 
 #rule merge_chromosome_bams:
 #    """
