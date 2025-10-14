@@ -38,10 +38,10 @@ BAM_IDS = [f"bam_{i:04d}" for i in range(len(BAMS))]
 BAM_DICT = dict(zip(BAM_IDS, BAMS))
 
 # Create work directories
-os.makedirs(WORKDIR, exist_ok=True)
-os.makedirs(f"{WORKDIR}/split_bams", exist_ok=True)
+os.makedirs(WORKDIR,                  exist_ok=True)
+os.makedirs(f"{WORKDIR}/split_bams",  exist_ok=True)
 os.makedirs(f"{WORKDIR}/merged_bams", exist_ok=True)
-os.makedirs(f"{WORKDIR}/pileups", exist_ok=True)
+os.makedirs(f"{WORKDIR}/pileups",     exist_ok=True)
 
 def get_reference_size_gb():
     """Get reference genome file size in GB"""
@@ -92,6 +92,27 @@ def estimate_runtime_mpileup(wildcards, attempt=1):
     num_bams = len(BAMS)
     base_time = max(60, int(num_bams * 0.5))  # ~30 seconds per BAM
     return base_time * attempt
+
+# limit the chromosome wildcard text to be A-z, 0-9, underscore, hyphen, and dot
+wildcard_constraints:
+    chrom = r"[A-Za-z0-9_.-]+"
+
+
+#def _all_chrom_txts(wildcards):
+#    # Wait for checkpoint; get its dynamic output dir
+#    chroms_dir = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
+#    # Infer chromosome names from files created by the checkpoint
+#    pat = os.path.join(chroms_dir, "{chrom}.txt")
+#    chroms = list(glob_wildcards(pat).chrom)
+#    # Return the full paths to require in rule all
+#    return [os.path.join(chroms_dir, f"{c}.txt") for c in chroms]
+
+rule all:
+    input:
+        expand(f"{WORKDIR}/chromosomes/{chrom}.txt",
+               chrom=checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir),
+        #OUTPUT,
+        #OUTPUT.replace(".txt", "_plot.png")
 
 checkpoint get_chromosomes:
     """
@@ -154,13 +175,13 @@ rule split_bam_all_chromosomes:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
         LOCAL_TMP=$(mktemp -d $TMPDIR/chep_split_XXXXXX)
-        
+
         echo "Splitting {params.bam_path} for all chromosomes"
-        
+
         # Copy BAM to local tmpdir
         LOCAL_BAM=$LOCAL_TMP/input.bam
         cp {params.bam_path} $LOCAL_BAM
-        
+
         # Copy index if exists, otherwise create it
         if [ -f {params.bam_path}.bai ]; then
             cp {params.bam_path}.bai $LOCAL_BAM.bai
@@ -317,10 +338,6 @@ rule plot_results:
         {CHEP_PLOT} -f {input} -x 0 -X 200 -o {output}
         """
 
-rule all:
-    input:
-        OUTPUT,
-        OUTPUT.replace(".txt", "_plot.png")
 
 rule clean:
     """Clean up intermediate files"""
