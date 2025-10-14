@@ -122,6 +122,8 @@ rule merge_all_bams:
         bams = BAMS
     output:
         bam = WORKDIR + "/merged_all.bam"
+    params:
+        num_bams = len(BAMS)
     threads: 4
     resources:
         mem_mb = lambda wildcards, attempt: max(8000, len(BAMS) * 100) * attempt,
@@ -131,7 +133,7 @@ rule merge_all_bams:
         TMPDIR=${{TMPDIR:-/tmp}}
         LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_merge_all_XXXXXX")
         
-        echo "Merging {len(input.bams)} BAMs into one master BAM"
+        echo "Merging {params.num_bams} BAMs into one master BAM"
         echo "Copying BAMs to local tmpdir: $LOCAL_TMP"
         
         # Create directory for input BAMs
@@ -149,7 +151,7 @@ rule merge_all_bams:
             cp "$bam" "$local_bam"
             echo "$local_bam" >> "$BAM_LIST"
         done
-        echo "Finished copying {len(input.bams)} BAMs to tmpdir"
+        echo "Finished copying {params.num_bams} BAMs to tmpdir"
         
         # Merge all BAMs
         echo "Starting merge..."
