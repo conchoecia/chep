@@ -93,192 +93,230 @@ def estimate_runtime_mpileup(wildcards, attempt=1):
     base_time = max(60, int(num_bams * 0.5))  # ~30 seconds per BAM
     return base_time * attempt
 
-def get_chromosomes_from_checkpoint(wildcards):
-    """Get list of chromosomes from checkpoint output"""
-    checkpoint_output = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
-    chrom_files = glob.glob(checkpoint_output + "/*.txt")
-    chroms = [os.path.basename(f).replace('.txt', '') for f in chrom_files]
-    return chroms
 
-def _all_split_bams(wc):
-    """Get all chromosome BAMs after splitting the merged BAM"""
-    chroms = get_chromosomes_from_checkpoint(wc)
-    return [os.path.join(WORKDIR, "split_bams", c + ".bam") for c in chroms]
-
-# limit the chromosome wildcard text to be A-z, 0-9, underscore, hyphen, and dot
+# limit the bam_id wildcard
 wildcard_constraints:
-    chrom = r"[A-Za-z0-9_.-]+"
+    bam_id = r"bam_\d+"
 
 rule all:
     input:
-        WORKDIR + "/merged_all.sorted.bam",
+        expand(WORKDIR + "/pileups/{bam_id}.pileup.gz", bam_id=BAM_IDS)
 
-rule merge_all_bams:
+rule mpileup_bam:
     """
-    Merge ALL 768 BAMs into one master BAM.
+    Run samtools mpileup on a single BAM file.
+    Output gzipped pileup text.
     Uses local tmpdir for I/O efficiency.
     """
     input:
-        bams = BAMS
+        bam = lambda wc: BAM_DICT[wc.bam_id]
     output:
-        bam = WORKDIR + "/merged_all.bam"
+        pileup = WORKDIR + "/pileups/{bam_id}.pileup.gz"
     params:
-        num_bams = len(BAMS)
-    threads: 4
+        ref = REF,
+        bam_id = "{bam_id}"
+    threads: 1
     resources:
-        mem_mb = lambda wildcards, attempt: max(8000, len(BAMS) * 100) * attempt,
-        runtime = lambda wildcards, attempt: max(120, len(BAMS) * 2) * attempt
+        mem_mb = lambda wildcards, attempt: 4000 * attempt,
+        runtime = lambda wildcards, attempt: 120 * attempt
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
-        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_merge_all_XXXXXX")
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_mpileup_XXXXXX")
         
-        echo "Merging {params.num_bams} BAMs into one master BAM"
-        echo "Copying BAMs to local tmpdir: $LOCAL_TMP"
+        echo "Running mpileup on {params.bam_id}"
         
-        # Create directory for input BAMs
-        mkdir -p "$LOCAL_TMP/inputs"
-        
-        # Copy all BAMs to local tmpdir with unique names and create list
-        BAM_LIST="$LOCAL_TMP/bam_list.txt"
-        counter=0
-        for bam in {input.bams}; do
-            counter=$((counter + 1))
-            if [ $((counter % 100)) -eq 0 ]; then
-                echo "  Copied $counter BAMs..."
-            fi
-            # Use counter to ensure unique filenames
-            local_bam="$LOCAL_TMP/inputs/bam_${{counter}}.bam"
-            cp "$bam" "$local_bam"
-            echo "$local_bam" >> "$BAM_LIST"
-        done
-        echo "Finished copying {params.num_bams} BAMs to tmpdir"
-        
-        # Merge all BAMs
-        echo "Starting merge..."
-        LOCAL_OUT="$LOCAL_TMP/merged.bam"
-        samtools merge -@ {threads} -b "$BAM_LIST" "$LOCAL_OUT"
-        
-        # Copy result back
-        echo "Copying merged BAM back to working directory..."
-        cp "$LOCAL_OUT" {output.bam}
-        
-        # Cleanup
-        rm -rf "$LOCAL_TMP"
-        
-        echo "Completed merge of all BAMs"
-        """
-
-rule sort_merged_bam:
-    """
-    Sort the merged BAM with 32 threads.
-    """
-    input:
-        bam = WORKDIR + "/merged_all.bam"
-    output:
-        bam = WORKDIR + "/merged_all.sorted.bam",
-        bai = WORKDIR + "/merged_all.sorted.bam.bai"
-    threads: 32
-    resources:
-        mem_mb = lambda wildcards, attempt: 64000 * attempt,
-        runtime = lambda wildcards, attempt: 240 * attempt
-    shell:
-        """
-        TMPDIR=${{TMPDIR:-/tmp}}
-        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_sort_XXXXXX")
-        
-        echo "Sorting merged BAM with {threads} threads"
-        
-        # Copy to local tmpdir
+        # Copy BAM to local tmpdir
         LOCAL_BAM="$LOCAL_TMP/input.bam"
         cp {input.bam} "$LOCAL_BAM"
         
-        # Sort
-        LOCAL_OUT="$LOCAL_TMP/sorted.bam"
-        samtools sort -@ {threads} -m 2G -T "$LOCAL_TMP/sort_tmp" "$LOCAL_BAM" -o "$LOCAL_OUT"
+        # Copy or create index
+        if [ -f {input.bam}.bai ]; then
+            cp {input.bam}.bai "$LOCAL_BAM.bai"
+        else
+            samtools index "$LOCAL_BAM"
+        fi
         
-        # Index
-        samtools index "$LOCAL_OUT"
+        # Run mpileup and gzip to tmpdir
+        LOCAL_OUT="$LOCAL_TMP/output.pileup.gz"
+        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} "$LOCAL_BAM" | gzip > "$LOCAL_OUT"
         
-        # Copy results back
-        cp "$LOCAL_OUT" {output.bam}
-        cp "$LOCAL_OUT.bai" {output.bai}
-        
-        # Cleanup
-        rm -rf "$LOCAL_TMP"
-        
-        echo "Completed sorting"
-        """
-
-checkpoint get_chromosomes:
-    """
-    Identify chromosomes >= min size from the sorted merged BAM.
-    Creates one output file per chromosome so downstream rules can use {chrom} wildcard.
-    """
-    input:
-        bam = WORKDIR + "/merged_all.sorted.bam",
-        bai = WORKDIR + "/merged_all.sorted.bam.bai"
-    output:
-        chroms_dir = directory(WORKDIR + "/chromosomes")
-    shell:
-        """
-        mkdir -p {output.chroms_dir}
-
-        # Get chromosome names and lengths from BAM header
-        samtools idxstats {input.bam} | awk -v minsize={MIN_CHROM_SIZE} '$2 >= minsize && $1 != "*" {{print $1}}' | while read chrom; do
-            echo "Selected: $chrom"
-            touch {output.chroms_dir}/$chrom.txt
-        done
-
-        echo "Chromosome selection complete"
-        ls {output.chroms_dir}/
-        """
-
-rule split_merged_bam_by_chromosome:
-    """
-    Split the merged sorted BAM into one BAM per chromosome.
-    One rule per chromosome - much simpler than before!
-    """
-    input:
-        bam = WORKDIR + "/merged_all.sorted.bam",
-        bai = WORKDIR + "/merged_all.sorted.bam.bai",
-        chrom_marker = WORKDIR + "/chromosomes/{chrom}.txt"
-    output:
-        bam = WORKDIR + "/split_bams/{chrom}.bam",
-        bai = WORKDIR + "/split_bams/{chrom}.bam.bai"
-    threads: 4
-    resources:
-        mem_mb = lambda wildcards, attempt: 4000 * attempt,
-        runtime = lambda wildcards, attempt: 60 * attempt
-    shell:
-        """
-        TMPDIR=${{TMPDIR:-/tmp}}
-        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_split_chrom_XXXXXX")
-        
-        echo "Extracting chromosome {wildcards.chrom}"
-        
-        # Copy merged BAM to local tmpdir
-        LOCAL_BAM="$LOCAL_TMP/merged.bam"
-        cp {input.bam} "$LOCAL_BAM"
-        cp {input.bai} "$LOCAL_BAM.bai"
-        
-        # Extract this chromosome
-        LOCAL_OUT="$LOCAL_TMP/{wildcards.chrom}.bam"
-        samtools view -@ {threads} -b "$LOCAL_BAM" "{wildcards.chrom}" > "$LOCAL_OUT"
-        
-        # Index
-        samtools index "$LOCAL_OUT"
-        
-        # Copy results back
-        mkdir -p $(dirname {output.bam})
-        cp "$LOCAL_OUT" {output.bam}
-        cp "$LOCAL_OUT.bai" {output.bai}
+        # Copy result back
+        mkdir -p $(dirname {output.pileup})
+        cp "$LOCAL_OUT" {output.pileup}
         
         # Cleanup
         rm -rf "$LOCAL_TMP"
         
-        echo "Completed: {wildcards.chrom}"
+        echo "Completed mpileup: {params.bam_id}"
         """
+
+##rule merge_all_bams:
+#    """
+#    Merge ALL 768 BAMs into one master BAM.
+#    Uses local tmpdir for I/O efficiency.
+#    """
+#    input:
+#        bams = BAMS
+#    output:
+#        bam = WORKDIR + "/merged_all.bam"
+#    params:
+#        num_bams = len(BAMS)
+#    threads: 4
+#    resources:
+#        mem_mb = lambda wildcards, attempt: max(8000, len(BAMS) * 100) * attempt,
+#        runtime = lambda wildcards, attempt: max(120, len(BAMS) * 2) * attempt
+#    shell:
+#        """
+#        TMPDIR=${{TMPDIR:-/tmp}}
+#        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_merge_all_XXXXXX")
+#
+#        echo "Merging {params.num_bams} BAMs into one master BAM"
+#        echo "Copying BAMs to local tmpdir: $LOCAL_TMP"
+#
+#        # Create directory for input BAMs
+#        mkdir -p "$LOCAL_TMP/inputs"
+#
+#        # Copy all BAMs to local tmpdir with unique names and create list
+#        BAM_LIST="$LOCAL_TMP/bam_list.txt"
+#        counter=0
+#        for bam in {input.bams}; do
+#            counter=$((counter + 1))
+#            if [ $((counter % 100)) -eq 0 ]; then
+#                echo "  Copied $counter BAMs..."
+#            fi
+#            # Use counter to ensure unique filenames
+#            local_bam="$LOCAL_TMP/inputs/bam_${{counter}}.bam"
+#            cp "$bam" "$local_bam"
+#            echo "$local_bam" >> "$BAM_LIST"
+#        done
+#        echo "Finished copying {params.num_bams} BAMs to tmpdir"
+#
+#        # Merge all BAMs
+#        echo "Starting merge..."
+#        LOCAL_OUT="$LOCAL_TMP/merged.bam"
+#        samtools merge -@ {threads} -b "$BAM_LIST" "$LOCAL_OUT"
+#
+#        # Copy result back
+#        echo "Copying merged BAM back to working directory..."
+#        cp "$LOCAL_OUT" {output.bam}
+#
+#        # Cleanup
+#        rm -rf "$LOCAL_TMP"
+#
+#        echo "Completed merge of all BAMs"
+#        """
+#
+#rule sort_merged_bam:
+#    """
+#    Sort the merged BAM with 32 threads.
+#    """
+#    input:
+#        bam = WORKDIR + "/merged_all.bam"
+#    output:
+#        bam = WORKDIR + "/merged_all.sorted.bam",
+#        bai = WORKDIR + "/merged_all.sorted.bam.bai"
+#    threads: 32
+#    resources:
+#        mem_mb = lambda wildcards, attempt: 64000 * attempt,
+#        runtime = lambda wildcards, attempt: 240 * attempt
+#    shell:
+#        """
+#        TMPDIR=${{TMPDIR:-/tmp}}
+#        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_sort_XXXXXX")
+#        
+#        echo "Sorting merged BAM with {threads} threads"
+#        
+#        # Copy to local tmpdir
+#        LOCAL_BAM="$LOCAL_TMP/input.bam"
+#        cp {input.bam} "$LOCAL_BAM"
+#        
+#        # Sort
+#        LOCAL_OUT="$LOCAL_TMP/sorted.bam"
+#        samtools sort -@ {threads} -m 2G -T "$LOCAL_TMP/sort_tmp" "$LOCAL_BAM" -o "$LOCAL_OUT"
+#        
+#        # Index
+#        samtools index "$LOCAL_OUT"
+#        
+#        # Copy results back
+#        cp "$LOCAL_OUT" {output.bam}
+#        cp "$LOCAL_OUT.bai" {output.bai}
+#        
+#        # Cleanup
+#        rm -rf "$LOCAL_TMP"
+#        
+#        echo "Completed sorting"
+#        """
+#
+#checkpoint get_chromosomes:
+#    """
+#    Identify chromosomes >= min size from the sorted merged BAM.
+#    Creates one output file per chromosome so downstream rules can use {chrom} wildcard.
+#    """
+#    input:
+#        bam = WORKDIR + "/merged_all.sorted.bam",
+#        bai = WORKDIR + "/merged_all.sorted.bam.bai"
+#    output:
+#        chroms_dir = directory(WORKDIR + "/chromosomes")
+#    shell:
+#        """
+#        mkdir -p {output.chroms_dir}
+#
+#        # Get chromosome names and lengths from BAM header
+#        samtools idxstats {input.bam} | awk -v minsize={MIN_CHROM_SIZE} '$2 >= minsize && $1 != "*" {{print $1}}' | while read chrom; do
+#            echo "Selected: $chrom"
+#            touch {output.chroms_dir}/$chrom.txt
+#        done
+#
+#        echo "Chromosome selection complete"
+#        ls {output.chroms_dir}/
+#        """
+#
+#rule split_merged_bam_by_chromosome:
+#    """
+#    Split the merged sorted BAM into one BAM per chromosome.
+#    One rule per chromosome - much simpler than before!
+#    """
+#    input:
+#        bam = WORKDIR + "/merged_all.sorted.bam",
+#        bai = WORKDIR + "/merged_all.sorted.bam.bai",
+#        chrom_marker = WORKDIR + "/chromosomes/{chrom}.txt"
+#    output:
+#        bam = WORKDIR + "/split_bams/{chrom}.bam",
+#        bai = WORKDIR + "/split_bams/{chrom}.bam.bai"
+#    threads: 4
+#    resources:
+#        mem_mb = lambda wildcards, attempt: 4000 * attempt,
+#        runtime = lambda wildcards, attempt: 60 * attempt
+#    shell:
+#        """
+#        TMPDIR=${{TMPDIR:-/tmp}}
+#        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_split_chrom_XXXXXX")
+#        
+#        echo "Extracting chromosome {wildcards.chrom}"
+#        
+#        # Copy merged BAM to local tmpdir
+#        LOCAL_BAM="$LOCAL_TMP/merged.bam"
+#        cp {input.bam} "$LOCAL_BAM"
+#        cp {input.bai} "$LOCAL_BAM.bai"
+#        
+#        # Extract this chromosome
+#        LOCAL_OUT="$LOCAL_TMP/{wildcards.chrom}.bam"
+#        samtools view -@ {threads} -b "$LOCAL_BAM" "{wildcards.chrom}" > "$LOCAL_OUT"
+#        
+#        # Index
+#        samtools index "$LOCAL_OUT"
+#        
+#        # Copy results back
+#        mkdir -p $(dirname {output.bam})
+#        cp "$LOCAL_OUT" {output.bam}
+#        cp "$LOCAL_OUT.bai" {output.bai}
+#        
+#        # Cleanup
+#        rm -rf "$LOCAL_TMP"
+#        
+#        echo "Completed: {wildcards.chrom}"
+#        """
 
 #rule mpileup_chromosome:
 #    """
