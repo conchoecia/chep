@@ -98,19 +98,18 @@ wildcard_constraints:
     chrom = r"[A-Za-z0-9_.-]+"
 
 
-#def _all_chrom_txts(wildcards):
-#    # Wait for checkpoint; get its dynamic output dir
-#    chroms_dir = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
-#    # Infer chromosome names from files created by the checkpoint
-#    pat = os.path.join(chroms_dir, "{chrom}.txt")
-#    chroms = list(glob_wildcards(pat).chrom)
-#    # Return the full paths to require in rule all
-#    return [os.path.join(chroms_dir, f"{c}.txt") for c in chroms]
+def _all_chrom_txts(wildcards):
+    # Wait for checkpoint; get its dynamic output dir
+    chroms_dir = checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir
+    # Infer chromosome names from files created by the checkpoint
+    pat = os.path.join(chroms_dir, "{chrom}.txt")
+    chroms = list(glob_wildcards(pat).chrom)
+    # Return the full paths to require in rule all
+    return [os.path.join(chroms_dir, f"{c}.txt") for c in chroms]
 
 rule all:
     input:
-        expand(f"{WORKDIR}/chromosomes/{chrom}.txt",
-               chrom=checkpoints.get_chromosomes.get(**wildcards).output.chroms_dir),
+        _all_chrom_txts
         #OUTPUT,
         #OUTPUT.replace(".txt", "_plot.png")
 
