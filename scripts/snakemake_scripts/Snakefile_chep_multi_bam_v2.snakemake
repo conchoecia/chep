@@ -236,9 +236,14 @@ rule mpileup_batch:
             echo "$LOCAL_BAM" >> "$BAM_LIST"
         done
         
-        # Run mpileup with -b option for multi-BAM processing
+        # Run mpileup with -b option for multi-BAM processing, write to tmpdir
         echo "Running mpileup on {params.num_bams} BAMs in {params.batch_id}..."
-        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} -b "$BAM_LIST" | gzip > {output.pileup}
+        LOCAL_OUT="$LOCAL_TMP/output.pileup.gz"
+        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} -b "$BAM_LIST" | gzip > "$LOCAL_OUT"
+        
+        # Copy result to final destination
+        mkdir -p $(dirname {output.pileup})
+        cp "$LOCAL_OUT" {output.pileup}
         
         # Cleanup
         rm -rf "$LOCAL_TMP"
