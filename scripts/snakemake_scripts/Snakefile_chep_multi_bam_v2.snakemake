@@ -166,8 +166,8 @@ rule split_bam_all_chromosomes:
         bam = lambda wc: BAM_DICT[wc.bam_id],
         chroms_dir = lambda wc: checkpoints.get_chromosomes.get(**wc).output.chroms_dir,
     output:
-        lambda wc: [os.path.join(WORKDIR, "split_bams", f"{wc.bam_id}.{c}.bam")
-                    for c in get_chromosomes_from_checkpoint(wc)]
+        bams = expand(f"{WORKDIR}/split_bams/{{bam_id}}.{chrom}.bam",
+                      chrom = lambda wc: get_chromosomes_from_checkpoint(wc))
     params:
         bam_path = lambda wildcards: BAM_DICT[wildcards.bam_id],
         outdir = f"{WORKDIR}/split_bams",
