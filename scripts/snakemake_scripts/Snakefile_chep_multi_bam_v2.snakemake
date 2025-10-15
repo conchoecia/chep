@@ -49,6 +49,12 @@ def get_bams_for_batch(batch_id):
     end_idx = min(start_idx + BATCH_SIZE, len(BAMS))
     return BAMS[start_idx:end_idx]
 
+def get_pileup_files_for_batch(batch_id):
+    """Get list of expected pileup files for a given batch"""
+    num_bams = len(get_bams_for_batch(batch_id))
+    return expand(WORKDIR + "/batch_pileups_tmp/{batch_id}/bam_{i}.pileup", 
+                  batch_id=batch_id, i=range(1, num_bams + 1))
+
 # Create work directories
 os.makedirs(WORKDIR,                  exist_ok=True)
 os.makedirs(f"{WORKDIR}/split_bams",  exist_ok=True)
@@ -203,10 +209,12 @@ rule mpileup_batch_parallel:
         bams = lambda wc: get_bams_for_batch(wc.batch_id),
         ref = REF
     output:
-        pileup_dir = temp(directory(WORKDIR + "/batch_pileups_tmp/{batch_id}"))
+        pileups = temp(expand(WORKDIR + "/batch_pileups_tmp/{{batch_id}}/bam_{i}.pileup",
+                    i=range(1, BATCH_SIZE + 1)))
     params:
         batch_id = "{batch_id}",
-        num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id))
+        num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id)),
+        output_dir = lambda wc: WORKDIR + "/batch_pileups_tmp/" + wc.batch_id
     threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM
     resources:
         mem_mb = lambda wildcards, attempt: max(12000, len(get_bams_for_batch(wildcards.batch_id)) * 2000) * attempt,
@@ -259,15 +267,19 @@ rule mpileup_batch_parallel:
         echo "Running parallel mpileup on {params.num_bams} BAMs in {params.batch_id}..."
         cat "$BAM_LIST" | parallel -j {threads} --will-cite \
             "samtools mpileup -B -Q 0 -q 0 -A -R -f $LOCAL_REF {{}} > $LOCAL_TMP/pileups/{{/.}}.pileup"
+        echo "Completed parallel mpileup for {params.batch_id}"
+
 
         # Copy pileup files to output directory
-        mkdir -p {output.pileup_dir}
-        cp $LOCAL_TMP/pileups/*.pileup {output.pileup_dir}/
+        echo "Copying pileup files to output directory..."
+        mkdir -p {params.output_dir}
+        cp $LOCAL_TMP/pileups/*.pileup {params.output_dir}/
+        echo "Copied pileup files to {params.output_dir}"
 
         # Cleanup
         rm -rf "$LOCAL_TMP"
 
-        echo "Completed parallel mpileup for {params.batch_id}"
+        echo "Completed parallel mpileup and copying for {params.batch_id}. Job should be done now!"
         """
 
 rule merge_batch_pileups:
@@ -278,11 +290,13 @@ rule merge_batch_pileups:
     Copies pileup files to tmpdir for fast local I/O to avoid network storage bottleneck.
     """
     input:
-        pileup_dir = WORKDIR + "/batch_pileups_tmp/{batch_id}"
+        pileups = expand(WORKDIR + "/batch_pileups_tmp/{{batch_id}}/bam_{i}.pileup",
+                         i=range(1, BATCH_SIZE + 1))
     output:
         pileup = WORKDIR + "/batch_pileups/{batch_id}.pileup.gz"
     params:
-        batch_id = "{batch_id}"
+        batch_id = "{batch_id}",
+        pileup_dir = lambda wc: WORKDIR + "/batch_pileups_tmp/" + wc.batch_id
     threads: 1  # Single threaded merge
     resources:
         mem_mb = lambda wildcards, attempt: 8000 * attempt,  # Low memory - streaming merge. Use 8 for overhead.
@@ -298,7 +312,7 @@ rule merge_batch_pileups:
         echo "Copying pileup files to tmpdir for fast I/O..."
 
         # Copy pileup files to local tmpdir for fast I/O
-        cp {input.pileup_dir}/*.pileup "$LOCAL_TMP/pileups/"
+        cp {params.pileup_dir}/*.pileup "$LOCAL_TMP/pileups/"
 
         # Merge all pileups using Python streaming merge script
         # Do merge in tmpdir and write output there
