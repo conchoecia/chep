@@ -193,7 +193,7 @@ rule mpileup_batch:
     Run samtools mpileup on a batch of ~10 BAMs in parallel.
     Each BAM is processed independently (5 min each), then outputs are merged.
     This is MUCH faster than using -b option which processes entire genome sequentially.
-    Copies reference genome to local tmpdir for fast I/O.
+    Copies reference genome to local tmpdir for fast I/O. This is important!!! Do not re-implement without copying the reference locally.
     """
     input:
         bams = lambda wc: get_bams_for_batch(wc.batch_id),
