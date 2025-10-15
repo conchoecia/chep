@@ -204,7 +204,7 @@ rule mpileup_batch:
         num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id))
     threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM in this batch
     resources:
-        mem_mb = lambda wildcards, attempt: max(4000, len(get_bams_for_batch(wildcards.batch_id)) * 500) * attempt,
+        mem_mb = lambda wildcards, attempt: max(12000, len(get_bams_for_batch(wildcards.batch_id)) * 2000) * attempt,  # ~2GB per parallel mpileup process
         runtime = lambda wildcards, attempt: 20 * attempt  # ~20 minutes (parallel processing @ ~5 min each + merging)
     shell:
         """
