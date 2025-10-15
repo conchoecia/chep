@@ -193,13 +193,14 @@ rule mpileup_batch:
     Run samtools mpileup on a batch of ~10 BAMs in parallel.
     Each BAM is processed independently (5 min each), then outputs are merged.
     This is MUCH faster than using -b option which processes entire genome sequentially.
+    Copies reference genome to local tmpdir for fast I/O.
     """
     input:
-        bams = lambda wc: get_bams_for_batch(wc.batch_id)
+        bams = lambda wc: get_bams_for_batch(wc.batch_id),
+        ref = REF
     output:
         pileup = WORKDIR + "/batch_pileups/{batch_id}.pileup.gz"
     params:
-        ref = REF,
         batch_id = "{batch_id}",
         num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id))
     threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM in this batch
@@ -208,11 +209,26 @@ rule mpileup_batch:
         runtime = lambda wildcards, attempt: 20 * attempt  # ~20 minutes (parallel processing @ ~5 min each + merging)
     shell:
         """
-        echo "Processing {params.batch_id} with {params.num_bams} BAMs in parallel"
-
         TMPDIR=${{TMPDIR:-/tmp}}
         LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_batch_mpileup_XXXXXX")
         mkdir -p "$LOCAL_TMP/bams" "$LOCAL_TMP/pileups"
+
+        echo "Processing {params.batch_id} with {params.num_bams} BAMs in parallel"
+        echo "Working directory: $LOCAL_TMP"
+
+        # Copy reference genome to local tmpdir
+        echo "  Copying reference genome to tmpdir..."
+        LOCAL_REF="$LOCAL_TMP/reference.fa"
+        cp {input.ref} "$LOCAL_REF"
+        
+        # Copy fai if it exists, otherwise create it on the local copy
+        if [ -f "{input.ref}.fai" ]; then
+            echo "  Copying reference index to tmpdir..."
+            cp "{input.ref}.fai" "$LOCAL_REF.fai"
+        else
+            echo "  Creating reference index in tmpdir..."
+            samtools faidx "$LOCAL_REF"
+        fi
 
         # Copy BAMs to local tmpdir with unique names to avoid basename collisions
         BAM_LIST="$LOCAL_TMP/bam_list.txt"
@@ -236,10 +252,10 @@ rule mpileup_batch:
         done
 
         # Run mpileup on each BAM in parallel using GNU parallel
-        # Each produces a separate pileup file
+        # Each produces a separate pileup file using local reference
         echo "Running parallel mpileup on {params.num_bams} BAMs in {params.batch_id}..."
         cat "$BAM_LIST" | parallel -j {threads} --will-cite \
-            "samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} {{}} > $LOCAL_TMP/pileups/{{/.}}.pileup"
+            "samtools mpileup -B -Q 0 -q 0 -A -R -f $LOCAL_REF {{}} > $LOCAL_TMP/pileups/{{/.}}.pileup"
 
         # Merge all pileups using Python script that combines by position
         echo "Merging {params.num_bams} pileup files..."
