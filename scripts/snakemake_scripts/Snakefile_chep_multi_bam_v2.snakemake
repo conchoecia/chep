@@ -202,10 +202,10 @@ rule mpileup_batch:
         ref = REF,
         batch_id = "{batch_id}",
         num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id))
-    threads: min(BATCH_SIZE, 10)  # One thread per BAM for parallel processing
+    threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM in this batch
     resources:
-        mem_mb = lambda wildcards, attempt: max(4000, BATCH_SIZE * 500) * attempt,
-        runtime = lambda wildcards, attempt: 20 * attempt  # ~20 minutes (parallel processing of 10 BAMs @ ~5 min each + merging)
+        mem_mb = lambda wildcards, attempt: max(4000, len(get_bams_for_batch(wildcards.batch_id)) * 500) * attempt,
+        runtime = lambda wildcards, attempt: 20 * attempt  # ~20 minutes (parallel processing @ ~5 min each + merging)
     shell:
         """
         echo "Processing {params.batch_id} with {params.num_bams} BAMs in parallel"
