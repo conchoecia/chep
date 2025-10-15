@@ -183,30 +183,35 @@ wildcard_constraints:
     bam_id = r"bam_\d+",
     batch_id = r"batch_\d+"
 
+# Group rules to run on same node
+ruleorder: mpileup_batch_parallel > merge_batch_pileups
+
+# Define group to ensure both rules run on same node
 rule all:
     input:
         #OUTPUT
         expand(WORKDIR + "/batch_pileups/{batch_id}.pileup.gz", batch_id=BATCH_IDS)
 
-rule mpileup_batch:
+rule mpileup_batch_parallel:
     """
     Run samtools mpileup on a batch of ~10 BAMs in parallel.
-    Each BAM is processed independently (5 min each), then outputs are merged.
-    This is MUCH faster than using -b option which processes entire genome sequentially.
-    Copies reference genome to local tmpdir for fast I/O. This is important!!! Do not re-implement without copying the reference locally.
+    Each BAM is processed independently (5 min each).
+    Produces individual pileup files that will be merged in next rule.
+    Copies reference genome to local tmpdir for fast I/O.
     """
     input:
         bams = lambda wc: get_bams_for_batch(wc.batch_id),
         ref = REF
     output:
-        pileup = WORKDIR + "/batch_pileups/{batch_id}.pileup.gz"
+        pileup_dir = temp(directory(WORKDIR + "/batch_pileups_tmp/{batch_id}"))
     params:
         batch_id = "{batch_id}",
         num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id))
-    threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM in this batch
+    threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM
     resources:
-        mem_mb = lambda wildcards, attempt: max(12000, len(get_bams_for_batch(wildcards.batch_id)) * 2000) * attempt,  # ~2GB per parallel mpileup process
-        runtime = lambda wildcards, attempt: 60 * attempt  # ~60 minutes (1 hour for parallel processing @ ~5 min each + merging + I/O)
+        mem_mb = lambda wildcards, attempt: max(12000, len(get_bams_for_batch(wildcards.batch_id)) * 2000) * attempt,
+        runtime = lambda wildcards, attempt: 60 * attempt
+    group: "batch_processing"
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
@@ -230,7 +235,7 @@ rule mpileup_batch:
             samtools faidx "$LOCAL_REF"
         fi
 
-        # Copy BAMs to local tmpdir with unique names to avoid basename collisions
+        # Copy BAMs to local tmpdir with unique names
         BAM_LIST="$LOCAL_TMP/bam_list.txt"
         counter=0
         for bam in {input.bams}; do
@@ -247,28 +252,67 @@ rule mpileup_batch:
                 samtools index "$LOCAL_BAM"
             fi
 
-            # Add to BAM list for parallel processing
             echo "$LOCAL_BAM" >> "$BAM_LIST"
         done
 
-        # Run mpileup on each BAM in parallel using GNU parallel
-        # Each produces a separate pileup file using local reference
+        # Run mpileup on each BAM in parallel
         echo "Running parallel mpileup on {params.num_bams} BAMs in {params.batch_id}..."
         cat "$BAM_LIST" | parallel -j {threads} --will-cite \
             "samtools mpileup -B -Q 0 -q 0 -A -R -f $LOCAL_REF {{}} > $LOCAL_TMP/pileups/{{/.}}.pileup"
 
-        # Merge all pileups using Python script that combines by position
-        echo "Merging {params.num_bams} pileup files..."
+        # Copy pileup files to output directory
+        mkdir -p {output.pileup_dir}
+        cp $LOCAL_TMP/pileups/*.pileup {output.pileup_dir}/
+
+        # Cleanup
+        rm -rf "$LOCAL_TMP"
+
+        echo "Completed parallel mpileup for {params.batch_id}"
+        """
+
+rule merge_batch_pileups:
+    """
+    Merge individual pileup files from parallel mpileup into single compressed file.
+    Uses streaming merge - very memory efficient.
+    Runs on same node as mpileup_batch_parallel via group.
+    Copies pileup files to tmpdir for fast local I/O to avoid network storage bottleneck.
+    """
+    input:
+        pileup_dir = WORKDIR + "/batch_pileups_tmp/{batch_id}"
+    output:
+        pileup = WORKDIR + "/batch_pileups/{batch_id}.pileup.gz"
+    params:
+        batch_id = "{batch_id}"
+    threads: 1  # Single threaded merge
+    resources:
+        mem_mb = lambda wildcards, attempt: 8000 * attempt,  # Low memory - streaming merge. Use 8 for overhead.
+        runtime = lambda wildcards, attempt: 360 * attempt  # 6 hours for merge - better safe than sorry
+    group: "batch_processing"
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_merge_XXXXXX")
+        mkdir -p "$LOCAL_TMP/pileups"
+
+        echo "Merging pileup files for {params.batch_id}..."
+        echo "Copying pileup files to tmpdir for fast I/O..."
+
+        # Copy pileup files to local tmpdir for fast I/O
+        cp {input.pileup_dir}/*.pileup "$LOCAL_TMP/pileups/"
+
+        # Merge all pileups using Python streaming merge script
+        # Do merge in tmpdir and write output there
         python3 {CHEP_SCRIPTS}/merge_pileups.py "$LOCAL_TMP/pileups" | gzip > "$LOCAL_TMP/output.pileup.gz"
 
-        # Copy result to final destination
+        # Copy final result to network storage
+        echo "Copying merged result to final destination..."
         mkdir -p $(dirname {output.pileup})
         cp "$LOCAL_TMP/output.pileup.gz" {output.pileup}
 
         # Cleanup
         rm -rf "$LOCAL_TMP"
 
-        echo "Completed {params.batch_id}: {output.pileup}"
+        echo "Completed merge for {params.batch_id}"
         """
 
 rule combine_batches_to_chep:
