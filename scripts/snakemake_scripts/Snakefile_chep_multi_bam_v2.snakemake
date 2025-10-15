@@ -189,10 +189,6 @@ wildcard_constraints:
     bam_id = r"bam_\d+",
     batch_id = r"batch_\d+"
 
-# Group rules to run on same node
-ruleorder: mpileup_batch_parallel > merge_batch_pileups
-
-# Define group to ensure both rules run on same node
 rule all:
     input:
         #OUTPUT
@@ -219,7 +215,6 @@ rule mpileup_batch_parallel:
     resources:
         mem_mb = lambda wildcards, attempt: max(12000, len(get_bams_for_batch(wildcards.batch_id)) * 2000) * attempt,
         runtime = lambda wildcards, attempt: 60 * attempt
-    group: "batch_processing"
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
@@ -286,7 +281,7 @@ rule merge_batch_pileups:
     """
     Merge individual pileup files from parallel mpileup into single compressed file.
     Uses streaming merge - very memory efficient.
-    Runs on same node as mpileup_batch_parallel via group.
+    Runs as separate job to free up threads from parallel mpileup.
     Copies pileup files to tmpdir for fast local I/O to avoid network storage bottleneck.
     """
     input:
@@ -301,7 +296,6 @@ rule merge_batch_pileups:
     resources:
         mem_mb = lambda wildcards, attempt: 8000 * attempt,  # Low memory - streaming merge. Use 8 for overhead.
         runtime = lambda wildcards, attempt: 360 * attempt  # 6 hours for merge - better safe than sorry
-    group: "batch_processing"
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
