@@ -206,7 +206,7 @@ rule mpileup_batch:
     threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM in this batch
     resources:
         mem_mb = lambda wildcards, attempt: max(12000, len(get_bams_for_batch(wildcards.batch_id)) * 2000) * attempt,  # ~2GB per parallel mpileup process
-        runtime = lambda wildcards, attempt: 20 * attempt  # ~20 minutes (parallel processing @ ~5 min each + merging)
+        runtime = lambda wildcards, attempt: 60 * attempt  # ~60 minutes (1 hour for parallel processing @ ~5 min each + merging + I/O)
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
