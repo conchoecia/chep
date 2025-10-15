@@ -18,6 +18,17 @@ Output is written to stdout in pileup format (6 columns):
 import sys
 import glob
 import heapq
+import os
+
+def get_memory_usage_mb():
+    """Get current memory usage in MB"""
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / 1024 / 1024
+    except ImportError:
+        # Fallback if psutil not available
+        return -1
 
 class PileupLine:
     """Wrapper for pileup line with comparison for heapq"""
@@ -75,6 +86,8 @@ def merge_pileups_streaming(pileup_dir):
     current_bases = []
     current_quals = []
     positions_merged = 0
+    last_chrom = None
+    positions_in_chrom = 0
     
     while heap:
         # Get next line from heap
@@ -83,6 +96,16 @@ def merge_pileups_streaming(pileup_dir):
         # Check if we've moved to a new position
         if current_key is None:
             current_key = pline.get_key()
+            last_chrom = pline.chrom
+        
+        # Check if we've moved to a new chromosome
+        if pline.chrom != last_chrom:
+            mem_mb = get_memory_usage_mb()
+            mem_str = f"{mem_mb:.1f} MB" if mem_mb > 0 else "N/A"
+            print(f"Done with {last_chrom}: {positions_in_chrom:,} positions merged, currently using {mem_str} RAM", 
+                  file=sys.stderr)
+            last_chrom = pline.chrom
+            positions_in_chrom = 0
         
         if pline.get_key() == current_key:
             # Same position, accumulate data
@@ -98,6 +121,14 @@ def merge_pileups_streaming(pileup_dir):
             quals = ''.join(current_quals) if current_quals else '*'
             yield f"{chrom}\t{pos}\t{ref}\t{current_depth}\t{bases}\t{quals}"
             positions_merged += 1
+            positions_in_chrom += 1
+            
+            # Progress reporting every 1M positions
+            if positions_merged % 1_000_000 == 0:
+                mem_mb = get_memory_usage_mb()
+                mem_str = f"{mem_mb:.1f} MB" if mem_mb > 0 else "N/A"
+                print(f"Progress: {positions_merged:,} positions merged on {chrom}, currently using {mem_str} RAM", 
+                      file=sys.stderr)
             
             # Reset for new position
             current_key = pline.get_key()
@@ -117,6 +148,13 @@ def merge_pileups_streaming(pileup_dir):
         quals = ''.join(current_quals) if current_quals else '*'
         yield f"{chrom}\t{pos}\t{ref}\t{current_depth}\t{bases}\t{quals}"
         positions_merged += 1
+        positions_in_chrom += 1
+        
+        # Final chromosome report
+        mem_mb = get_memory_usage_mb()
+        mem_str = f"{mem_mb:.1f} MB" if mem_mb > 0 else "N/A"
+        print(f"Done with {last_chrom}: {positions_in_chrom:,} positions merged, currently using {mem_str} RAM", 
+              file=sys.stderr)
 
     # Close all files
     for fh in file_handles:
