@@ -190,10 +190,9 @@ rule all:
 
 rule mpileup_batch:
     """
-    Run samtools mpileup on a batch of ~10 BAMs.
-    Saves gzipped pileup output for potential reuse.
-    Uses -b option with file list for proper multi-BAM mpileup.
-    Copies BAMs to local tmpdir with unique names to avoid collisions.
+    Run samtools mpileup on a batch of ~10 BAMs in parallel.
+    Each BAM is processed independently (5 min each), then outputs are merged.
+    This is MUCH faster than using -b option which processes entire genome sequentially.
     """
     input:
         bams = lambda wc: get_bams_for_batch(wc.batch_id)
@@ -203,18 +202,18 @@ rule mpileup_batch:
         ref = REF,
         batch_id = "{batch_id}",
         num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id))
-    threads: 1
+    threads: min(BATCH_SIZE, 10)  # One thread per BAM for parallel processing
     resources:
         mem_mb = lambda wildcards, attempt: max(4000, BATCH_SIZE * 500) * attempt,
-        runtime = lambda wildcards, attempt: 120 * attempt  # ~2 hours per batch (10 BAMs × genome processing + awk merging)
+        runtime = lambda wildcards, attempt: 20 * attempt  # ~20 minutes (parallel processing of 10 BAMs @ ~5 min each + merging)
     shell:
         """
-        echo "Processing {params.batch_id} with {params.num_bams} BAMs"
-        
+        echo "Processing {params.batch_id} with {params.num_bams} BAMs in parallel"
+
         TMPDIR=${{TMPDIR:-/tmp}}
         LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_batch_mpileup_XXXXXX")
-        mkdir -p "$LOCAL_TMP/bams"
-        
+        mkdir -p "$LOCAL_TMP/bams" "$LOCAL_TMP/pileups"
+
         # Copy BAMs to local tmpdir with unique names to avoid basename collisions
         BAM_LIST="$LOCAL_TMP/bam_list.txt"
         counter=0
@@ -223,7 +222,7 @@ rule mpileup_batch:
             LOCAL_BAM="$LOCAL_TMP/bams/bam_${{counter}}.bam"
             echo "  Copying BAM $counter to tmpdir..."
             cp "$bam" "$LOCAL_BAM"
-            
+
             # Copy or create index
             if [ -f "${{bam}}.bai" ]; then
                 cp "${{bam}}.bai" "${{LOCAL_BAM}}.bai"
@@ -231,37 +230,28 @@ rule mpileup_batch:
                 echo "  Creating index for BAM $counter..."
                 samtools index "$LOCAL_BAM"
             fi
-            
-            # Add to BAM list
+
+            # Add to BAM list for parallel processing
             echo "$LOCAL_BAM" >> "$BAM_LIST"
         done
-        
-        # Run mpileup with -b option for multi-BAM processing, write to tmpdir
-        # Pipe through awk to merge columns from multiple BAMs into one
-        echo "Running mpileup on {params.num_bams} BAMs in {params.batch_id}..."
-        LOCAL_OUT="$LOCAL_TMP/output.pileup.gz"
-        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} -b "$BAM_LIST" \
-        | awk 'BEGIN{{OFS="\t"}}{{ \
-            sum=0; b=""; q=""; \
-            for (i=4; i<=NF; i+=3) {{ \
-                d=$i; rb=$(i+1); rq=$(i+2); \
-                if (d>0) {{ \
-                    sum+=d; \
-                    if (rb!="*") b=b rb; \
-                    if (rq!="*") q=q rq; \
-                }} \
-            }} \
-            print $1,$2,$3,sum,(sum?b:"*"),(sum?q:"*"); \
-        }}' \
-        | gzip > "$LOCAL_OUT"
-        
+
+        # Run mpileup on each BAM in parallel using GNU parallel
+        # Each produces a separate pileup file
+        echo "Running parallel mpileup on {params.num_bams} BAMs in {params.batch_id}..."
+        cat "$BAM_LIST" | parallel -j {threads} --will-cite \
+            "samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} {{}} > $LOCAL_TMP/pileups/{{/.}}.pileup"
+
+        # Merge all pileups using Python script that combines by position
+        echo "Merging {params.num_bams} pileup files..."
+        python3 {CHEP_SCRIPTS}/merge_pileups.py "$LOCAL_TMP/pileups" | gzip > "$LOCAL_TMP/output.pileup.gz"
+
         # Copy result to final destination
         mkdir -p $(dirname {output.pileup})
-        cp "$LOCAL_OUT" {output.pileup}
-        
+        cp "$LOCAL_TMP/output.pileup.gz" {output.pileup}
+
         # Cleanup
         rm -rf "$LOCAL_TMP"
-        
+
         echo "Completed {params.batch_id}: {output.pileup}"
         """
 
