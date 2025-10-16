@@ -27,8 +27,49 @@
 #include <filesystem>
 #include <cstring>
 #include <zlib.h>
+#include <iomanip>
+
+// Platform-specific includes for memory usage
+#ifdef __APPLE__
+#include <mach/mach.h>
+#elif __linux__
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
+
+// Get current RSS memory usage in MB
+double get_memory_usage_mb() {
+#ifdef __APPLE__
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t infoCount = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                  (task_info_t)&info, &infoCount) == KERN_SUCCESS) {
+        return static_cast<double>(info.resident_size) / (1024.0 * 1024.0);
+    }
+#elif __linux__
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        if (line.substr(0, 6) == "VmRSS:") {
+            std::istringstream iss(line.substr(6));
+            double kb;
+            iss >> kb;
+            return kb / 1024.0;
+        }
+    }
+#endif
+    return -1.0; // Unknown platform or error
+}
+
+// Format bytes per position for readability
+std::string format_bytes_per_position(size_t positions, double memory_mb) {
+    if (positions == 0) return "N/A";
+    double bytes_per_pos = (memory_mb * 1024.0 * 1024.0) / positions;
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1) << bytes_per_pos;
+    return oss.str();
+}
 
 // Structure to hold pileup data for a single position
 struct PileupData {
@@ -264,7 +305,8 @@ int main(int argc, char* argv[]) {
     }
     
     std::sort(pileup_files.begin(), pileup_files.end());
-    std::cerr << "Merging " << pileup_files.size() << " pileup files..." << std::endl;
+    std::cerr << "Found " << pileup_files.size() << " pileup files" << std::endl;
+    std::cerr << "Starting merge..." << std::endl;
     
     // Map to store all positions
     std::map<PosKey, PileupData> positions;
@@ -273,18 +315,45 @@ int main(int argc, char* argv[]) {
     // Process each file
     for (size_t i = 0; i < pileup_files.size(); i++) {
         std::string filename = fs::path(pileup_files[i]).filename().string();
-        std::cerr << "Reading file " << (i + 1) << "/" << pileup_files.size() 
-                  << ": " << filename << "..." << std::endl;
+        std::cerr << "\n[" << (i + 1) << "/" << pileup_files.size() 
+                  << "] Processing: " << filename << std::endl;
         
         size_t lines_before = total_lines;
+        size_t positions_before = positions.size();
         process_pileup_file(pileup_files[i], positions, total_lines);
         
-        std::cerr << "  Read " << (total_lines - lines_before) << " lines, "
-                  << positions.size() << " unique positions total" << std::endl;
+        size_t lines_added = total_lines - lines_before;
+        size_t positions_added = positions.size() - positions_before;
+        
+        double mem_mb = get_memory_usage_mb();
+        std::string mem_str = (mem_mb >= 0) ? 
+            (std::to_string(static_cast<int>(mem_mb)) + " MB") : "unknown";
+        
+        std::string bytes_per_pos = format_bytes_per_position(positions.size(), mem_mb);
+        
+        std::cerr << "  Lines read: " << lines_added 
+                  << ", New positions: " << positions_added 
+                  << ", Total positions: " << positions.size() << std::endl;
+        std::cerr << "  Memory: " << mem_str;
+        if (mem_mb >= 0) {
+            std::cerr << " (" << bytes_per_pos << " bytes/position)";
+        }
+        std::cerr << std::endl;
     }
     
-    std::cerr << "All files read. Total unique positions: " << positions.size() << std::endl;
-    std::cerr << "Sorting and outputting..." << std::endl;
+    double final_mem_mb = get_memory_usage_mb();
+    std::string final_mem_str = (final_mem_mb >= 0) ? 
+        (std::to_string(static_cast<int>(final_mem_mb)) + " MB") : "unknown";
+    std::string final_bytes_per_pos = format_bytes_per_position(positions.size(), final_mem_mb);
+    
+    std::cerr << "\nAll files read." << std::endl;
+    std::cerr << "  Total unique positions: " << positions.size() << std::endl;
+    std::cerr << "  Final memory: " << final_mem_str;
+    if (final_mem_mb >= 0) {
+        std::cerr << " (" << final_bytes_per_pos << " bytes/position)";
+    }
+    std::cerr << std::endl;
+    std::cerr << "\nSorting and writing output..." << std::endl;
     
     // Sort and output
     if (use_chrom_order) {
@@ -305,11 +374,12 @@ int main(int argc, char* argv[]) {
         for (const auto& [key, data] : sorted_positions) {
             if (key.chrom != last_chrom) {
                 if (!last_chrom.empty()) {
-                    std::cerr << "Done with " << last_chrom << ": " 
+                    std::cerr << "  Wrote " << last_chrom << ": " 
                               << chrom_count << " positions" << std::endl;
                 }
                 last_chrom = key.chrom;
                 chrom_count = 0;
+                std::cerr << "Writing chromosome: " << key.chrom << "..." << std::endl;
             }
             chrom_count++;
             
@@ -321,7 +391,7 @@ int main(int argc, char* argv[]) {
         }
         
         if (!last_chrom.empty()) {
-            std::cerr << "Done with " << last_chrom << ": " 
+            std::cerr << "  Wrote " << last_chrom << ": " 
                       << chrom_count << " positions" << std::endl;
         }
     } else {
@@ -331,11 +401,12 @@ int main(int argc, char* argv[]) {
         for (const auto& [key, data] : positions) {
             if (key.chrom != last_chrom) {
                 if (!last_chrom.empty()) {
-                    std::cerr << "Done with " << last_chrom << ": " 
+                    std::cerr << "  Wrote " << last_chrom << ": " 
                               << chrom_count << " positions" << std::endl;
                 }
                 last_chrom = key.chrom;
                 chrom_count = 0;
+                std::cerr << "Writing chromosome: " << key.chrom << "..." << std::endl;
             }
             chrom_count++;
             
@@ -347,12 +418,12 @@ int main(int argc, char* argv[]) {
         }
         
         if (!last_chrom.empty()) {
-            std::cerr << "Done with " << last_chrom << ": " 
+            std::cerr << "  Wrote " << last_chrom << ": " 
                       << chrom_count << " positions" << std::endl;
         }
     }
     
-    std::cerr << "Merge complete!" << std::endl;
+    std::cerr << "\nMerge complete!" << std::endl;
     
     return 0;
 }
