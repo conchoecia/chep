@@ -59,12 +59,30 @@ def get_sort_key(chrom, pos, chrom_order):
     else:
         return (chrom, pos)
 
-def merge_pileups_in_memory(pileup_dir, chrom_order=None):
+def get_chromosomes_from_files(pileup_files):
     """
-    Merge multiple pileup files by loading all data into memory.
-    Uses a dictionary keyed by (chrom, pos, ref) to accumulate data.
-    Strings are concatenated directly (not stored in lists) for memory efficiency.
-    Memory usage: O(n*m) where n is unique positions and m is avg bases/quals length.
+    Scan pileup files to get list of all chromosomes.
+    Returns set of chromosome names.
+    """
+    chroms = set()
+    for pfile in pileup_files:
+        if pfile.endswith('.gz'):
+            fh = gzip.open(pfile, 'rt')
+        else:
+            fh = open(pfile, 'r')
+        
+        for line in fh:
+            chrom = line.split('\t', 1)[0]
+            chroms.add(chrom)
+        fh.close()
+    
+    return chroms
+
+def merge_pileups_by_chromosome(pileup_dir, chrom_order=None):
+    """
+    Merge multiple pileup files by processing one chromosome at a time.
+    Memory usage: O(n) where n is positions in the largest chromosome.
+    Much more memory-efficient than loading entire genome at once.
     
     Handles both .pileup and .pileup.gz files automatically.
     
@@ -75,7 +93,7 @@ def merge_pileups_in_memory(pileup_dir, chrom_order=None):
     Yields:
         Merged pileup lines in sorted order
     """
-    pileup_files = sorted(glob.glob(pileup_dir + "/*.pileup.gz") + 
+    pileup_files = sorted(glob.glob(pileup_dir + "/*.pileup.gz") +
                          glob.glob(pileup_dir + "/*.pileup"))
     
     pileup_files = sorted(list(set(pileup_files)))
@@ -84,98 +102,88 @@ def merge_pileups_in_memory(pileup_dir, chrom_order=None):
         print("Warning: No pileup files found in " + pileup_dir, file=sys.stderr)
         return
     
-    print("Merging " + str(len(pileup_files)) + " pileup files by loading into memory...", file=sys.stderr)
+    print("Merging " + str(len(pileup_files)) + " pileup files chromosome-by-chromosome...", file=sys.stderr)
     start_time = time.time()
     
-    # Dictionary to accumulate all positions: {(chrom, pos, ref): [depth, bases_str, quals_str]}
-    positions = {}
+    # Get list of all chromosomes from files
+    print("Scanning files to identify chromosomes...", file=sys.stderr)
+    all_chroms = get_chromosomes_from_files(pileup_files)
+    print("Found " + str(len(all_chroms)) + " chromosomes", file=sys.stderr)
     
-    for idx, pfile in enumerate(pileup_files):
-        print("Reading file " + str(idx+1) + "/" + str(len(pileup_files)) + ": " + os.path.basename(pfile) + "...", file=sys.stderr)
+    # Sort chromosomes by reference order or lexicographically
+    if chrom_order is not None:
+        sorted_chroms = sorted(all_chroms, key=lambda c: chrom_order.get(c, len(chrom_order) + 1000000))
+    else:
+        sorted_chroms = sorted(all_chroms)
+    
+    total_positions = 0
+    
+    # Process one chromosome at a time
+    for chrom_idx, current_chrom in enumerate(sorted_chroms):
+        print("Processing chromosome " + str(chrom_idx+1) + "/" + str(len(sorted_chroms)) + ": " + current_chrom + "...", file=sys.stderr)
         
-        if pfile.endswith('.gz'):
-            fh = gzip.open(pfile, 'rt')
-        else:
-            fh = open(pfile, 'r')
+        # Dictionary for this chromosome only: {(pos, ref): [depth, bases, quals]}
+        positions = {}
         
-        lines_read = 0
-        for line in fh:
-            parts = line.split('\t', 5)
-            chrom = parts[0]
-            pos = int(parts[1])
-            ref = parts[2]
-            depth = int(parts[3])
-            bases = parts[4] if len(parts) > 4 and parts[4] != '*' else ''
-            quals = parts[5].rstrip('\n') if len(parts) > 5 and parts[5] != '*' else ''
-            
-            key = (chrom, pos, ref)
-            
-            if key in positions:
-                positions[key][0] += depth
-                if bases:
-                    positions[key][1] += bases
-                if quals:
-                    positions[key][2] += quals
+        # Read all files and accumulate data for this chromosome
+        for pfile in pileup_files:
+            if pfile.endswith('.gz'):
+                fh = gzip.open(pfile, 'rt')
             else:
-                positions[key] = [depth, bases, quals]
+                fh = open(pfile, 'r')
             
-            lines_read += 1
-            if lines_read % 1_000_000 == 0:
-                mem_mb = get_memory_usage_mb()
-                if mem_mb > 0:
-                    mem_str = str(round(mem_mb, 1)) + " MB"
+            for line in fh:
+                parts = line.split('\t', 5)
+                chrom = parts[0]
+                
+                # Skip if not the chromosome we're processing
+                if chrom != current_chrom:
+                    continue
+                
+                pos = int(parts[1])
+                ref = parts[2]
+                depth = int(parts[3])
+                bases = parts[4] if len(parts) > 4 and parts[4] != '*' else ''
+                quals = parts[5].rstrip('\n') if len(parts) > 5 and parts[5] != '*' else ''
+                
+                key = (pos, ref)
+                
+                if key in positions:
+                    positions[key][0] += depth
+                    if bases:
+                        positions[key][1] += bases
+                    if quals:
+                        positions[key][2] += quals
                 else:
-                    mem_str = "N/A"
-                print("  Read " + "{:,}".format(lines_read) + " lines, " + "{:,}".format(len(positions)) + " unique positions, using " + mem_str + " RAM", file=sys.stderr)
+                    positions[key] = [depth, bases, quals]
+            
+            fh.close()
         
-        fh.close()
+        # Sort and output this chromosome
+        num_positions = len(positions)
+        total_positions += num_positions
+        
+        for key in sorted(positions.keys()):
+            pos, ref = key
+            depth, bases, quals = positions[key]
+            
+            bases = bases if bases else '*'
+            quals = quals if quals else '*'
+            
+            yield current_chrom + "\t" + str(pos) + "\t" + ref + "\t" + str(depth) + "\t" + bases + "\t" + quals
+        
         mem_mb = get_memory_usage_mb()
         if mem_mb > 0:
             mem_str = str(round(mem_mb, 1)) + " MB"
         else:
             mem_str = "N/A"
-        print("  Completed file " + str(idx+1) + ": " + "{:,}".format(lines_read) + " lines read, " + "{:,}".format(len(positions)) + " total unique positions, using " + mem_str + " RAM", file=sys.stderr)
-    
-    elapsed = time.time() - start_time
-    mem_mb = get_memory_usage_mb()
-    if mem_mb > 0:
-        mem_str = str(round(mem_mb, 1)) + " MB"
-    else:
-        mem_str = "N/A"
-    print("All files read in " + str(round(elapsed, 1)) + "s. Total unique positions: " + "{:,}".format(len(positions)) + ", using " + mem_str + " RAM", file=sys.stderr)
-    
-    print("Sorting and outputting " + "{:,}".format(len(positions)) + " positions...", file=sys.stderr)
-    output_start = time.time()
-    
-    def sort_key_func(key):
-        chrom, pos, ref = key
-        return (get_sort_key(chrom, pos, chrom_order), ref)
-    
-    last_chrom = None
-    positions_in_chrom = 0
-    
-    for key in sorted(positions.keys(), key=sort_key_func):
-        chrom, pos, ref = key
-        depth, bases, quals = positions[key]
+        print("  Completed " + current_chrom + ": " + "{:,}".format(num_positions) + " positions, using " + mem_str + " RAM", file=sys.stderr)
         
-        bases = bases if bases else '*'
-        quals = quals if quals else '*'
-        
-        yield chrom + "\t" + str(pos) + "\t" + ref + "\t" + str(depth) + "\t" + bases + "\t" + quals
-        
-        if chrom != last_chrom:
-            if last_chrom is not None:
-                print("Done with " + last_chrom + ": " + "{:,}".format(positions_in_chrom) + " positions", file=sys.stderr)
-            last_chrom = chrom
-            positions_in_chrom = 0
-        positions_in_chrom += 1
-    
-    if last_chrom is not None:
-        print("Done with " + last_chrom + ": " + "{:,}".format(positions_in_chrom) + " positions", file=sys.stderr)
+        # Clear dictionary to free memory
+        positions.clear()
     
     total_time = time.time() - start_time
-    output_time = time.time() - output_start
-    print("Merge complete: " + "{:,}".format(len(positions)) + " positions in " + str(round(total_time, 1)) + "s (" + str(round(output_time, 1)) + "s for sorting/output)", file=sys.stderr)
+    print("Merge complete: " + "{:,}".format(total_positions) + " total positions in " + str(round(total_time, 1)) + "s", file=sys.stderr)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -194,7 +202,7 @@ if __name__ == "__main__":
     output_buffer = []
     BUFFER_SIZE = 10000
     
-    for line in merge_pileups_in_memory(args.pileup_dir, chrom_order):
+    for line in merge_pileups_by_chromosome(args.pileup_dir, chrom_order):
         output_buffer.append(line)
         if len(output_buffer) >= BUFFER_SIZE:
             sys.stdout.write('\n'.join(output_buffer) + '\n')
