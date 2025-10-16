@@ -239,7 +239,7 @@ rule mpileup_batch_parallel:
     threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM
     resources:
         mem_mb = lambda wildcards, attempt: max(12000, len(get_bams_for_batch(wildcards.batch_id)) * 2000) * attempt,
-        runtime = lambda wildcards, attempt: 60 * attempt
+        runtime = lambda wildcards, attempt: 90 * attempt
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
