@@ -145,7 +145,7 @@ rule merge_all_batches:
     retries: 2
     resources:
         mem_mb = lambda wildcards, attempt: max(16000, NUM_BATCHES * 1000) * attempt,
-        runtime = lambda wildcards, attempt: 180 * attempt
+        runtime = lambda wildcards, attempt: 720 * attempt  # 12 hours
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
