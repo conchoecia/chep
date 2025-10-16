@@ -293,7 +293,7 @@ rule merge_batch_pileups:
         pileup_dir = lambda wc: WORKDIR + "/batch_pileups_tmp/" + wc.batch_id
     threads: 1  # Single threaded merge
     resources:
-        mem_mb = lambda wildcards, attempt: 8000 * attempt,  # Low memory - streaming merge. Use 8 for overhead.
+        mem_mb = lambda wildcards, attempt: 20000 * attempt,  # 20GB at first
         runtime = lambda wildcards, attempt: 360 * attempt  # 6 hours for merge - better safe than sorry
     shell:
         """

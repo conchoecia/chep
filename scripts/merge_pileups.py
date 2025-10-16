@@ -63,7 +63,8 @@ def merge_pileups_in_memory(pileup_dir, chrom_order=None):
     """
     Merge multiple pileup files by loading all data into memory.
     Uses a dictionary keyed by (chrom, pos, ref) to accumulate data.
-    Memory usage: O(n) where n is total unique positions across all files.
+    Strings are concatenated directly (not stored in lists) for memory efficiency.
+    Memory usage: O(n*m) where n is unique positions and m is avg bases/quals length.
     
     Handles both .pileup and .pileup.gz files automatically.
     
@@ -86,6 +87,7 @@ def merge_pileups_in_memory(pileup_dir, chrom_order=None):
     print("Merging " + str(len(pileup_files)) + " pileup files by loading into memory...", file=sys.stderr)
     start_time = time.time()
     
+    # Dictionary to accumulate all positions: {(chrom, pos, ref): [depth, bases_str, quals_str]}
     positions = {}
     
     for idx, pfile in enumerate(pileup_files):
@@ -111,13 +113,11 @@ def merge_pileups_in_memory(pileup_dir, chrom_order=None):
             if key in positions:
                 positions[key][0] += depth
                 if bases:
-                    positions[key][1].append(bases)
+                    positions[key][1] += bases
                 if quals:
-                    positions[key][2].append(quals)
+                    positions[key][2] += quals
             else:
-                bases_list = [bases] if bases else []
-                quals_list = [quals] if quals else []
-                positions[key] = [depth, bases_list, quals_list]
+                positions[key] = [depth, bases, quals]
             
             lines_read += 1
             if lines_read % 1_000_000 == 0:
@@ -156,10 +156,10 @@ def merge_pileups_in_memory(pileup_dir, chrom_order=None):
     
     for key in sorted(positions.keys(), key=sort_key_func):
         chrom, pos, ref = key
-        depth, bases_list, quals_list = positions[key]
+        depth, bases, quals = positions[key]
         
-        bases = ''.join(bases_list) if bases_list else '*'
-        quals = ''.join(quals_list) if quals_list else '*'
+        bases = bases if bases else '*'
+        quals = quals if quals else '*'
         
         yield chrom + "\t" + str(pos) + "\t" + ref + "\t" + str(depth) + "\t" + bases + "\t" + quals
         
