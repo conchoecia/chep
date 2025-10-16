@@ -52,7 +52,7 @@ def get_bams_for_batch(batch_id):
 def get_pileup_files_for_batch(batch_id):
     """Get list of expected pileup files for a given batch"""
     num_bams = len(get_bams_for_batch(batch_id))
-    return expand(WORKDIR + "/batch_pileups_tmp/{batch_id}/bam_{i}.pileup", 
+    return expand(WORKDIR + "/batch_pileups_tmp/{batch_id}/bam_{i}.pileup.gz", 
                   batch_id=batch_id, i=range(1, num_bams + 1))
 
 # Create work directories
@@ -205,7 +205,7 @@ rule mpileup_batch_parallel:
         bams = lambda wc: get_bams_for_batch(wc.batch_id),
         ref = REF
     output:
-        pileups = temp(expand(WORKDIR + "/batch_pileups_tmp/{{batch_id}}/bam_{i}.pileup",
+        pileups = temp(expand(WORKDIR + "/batch_pileups_tmp/{{batch_id}}/bam_{i}.pileup.gz",
                     i=range(1, BATCH_SIZE + 1)))
     params:
         batch_id = "{batch_id}",
@@ -228,7 +228,7 @@ rule mpileup_batch_parallel:
         echo "  Copying reference genome to tmpdir..."
         LOCAL_REF="$LOCAL_TMP/reference.fa"
         cp {input.ref} "$LOCAL_REF"
-        
+ 
         # Copy fai if it exists, otherwise create it on the local copy
         if [ -f "{input.ref}.fai" ]; then
             echo "  Copying reference index to tmpdir..."
@@ -261,14 +261,14 @@ rule mpileup_batch_parallel:
         # Run mpileup on each BAM in parallel
         echo "Running parallel mpileup on {params.num_bams} BAMs in {params.batch_id}..."
         cat "$BAM_LIST" | parallel -j {threads} --will-cite \
-            "samtools mpileup -B -Q 0 -q 0 -A -R -f $LOCAL_REF {{}} > $LOCAL_TMP/pileups/{{/.}}.pileup"
+            "samtools mpileup -B -Q 0 -q 0 -A -R -f $LOCAL_REF {{}} | gzip > $LOCAL_TMP/pileups/{{/.}}.pileup.gz"
         echo "Completed parallel mpileup for {params.batch_id}"
 
 
         # Copy pileup files to output directory
         echo "Copying pileup files to output directory..."
         mkdir -p {params.output_dir}
-        cp $LOCAL_TMP/pileups/*.pileup {params.output_dir}/
+        cp $LOCAL_TMP/pileups/*.pileup.gz {params.output_dir}/
         echo "Copied pileup files to {params.output_dir}"
 
         # Cleanup
@@ -280,13 +280,14 @@ rule mpileup_batch_parallel:
 rule merge_batch_pileups:
     """
     Merge individual pileup files from parallel mpileup into single compressed file.
-    Uses streaming merge - very memory efficient.
+    Uses in-memory merge for guaranteed correct sorting.
     Runs as separate job to free up threads from parallel mpileup.
     Copies pileup files to tmpdir for fast local I/O to avoid network storage bottleneck.
     """
     input:
-        pileups = expand(WORKDIR + "/batch_pileups_tmp/{{batch_id}}/bam_{i}.pileup",
-                         i=range(1, BATCH_SIZE + 1))
+        pileups = expand(WORKDIR + "/batch_pileups_tmp/{{batch_id}}/bam_{i}.pileup.gz",
+                         i=range(1, BATCH_SIZE + 1)),
+        ref = REF
     output:
         pileup = WORKDIR + "/batch_pileups/{batch_id}.pileup.gz"
     params:
@@ -306,11 +307,27 @@ rule merge_batch_pileups:
         echo "Copying pileup files to tmpdir for fast I/O..."
 
         # Copy pileup files to local tmpdir for fast I/O
-        cp {params.pileup_dir}/*.pileup "$LOCAL_TMP/pileups/"
+        cp {params.pileup_dir}/*.pileup.gz "$LOCAL_TMP/pileups/"
 
-        # Merge all pileups using Python streaming merge script
+        # Copy reference and index to local tmpdir
+        LOCAL_REF="$LOCAL_TMP/reference.fa"
+        LOCAL_FAI="$LOCAL_TMP/reference.fa.fai"
+        
+        echo "Copying reference genome to tmpdir..."
+        cp {input.ref} "$LOCAL_REF"
+        
+        # Copy fai if it exists, otherwise create it in the local tmpdir
+        if [ -f "{input.ref}.fai" ]; then
+            echo "Copying reference index to tmpdir..."
+            cp {input.ref}.fai "$LOCAL_FAI"
+        else
+            echo "Creating reference index in tmpdir..."
+            samtools faidx "$LOCAL_REF"
+        fi
+
+        # Merge all pileups using Python in-memory merge script with reference order
         # Do merge in tmpdir and write output there
-        python3 {CHEP_SCRIPTS}/merge_pileups.py "$LOCAL_TMP/pileups" | gzip > "$LOCAL_TMP/output.pileup.gz"
+        python3 {CHEP_SCRIPTS}/merge_pileups.py "$LOCAL_TMP/pileups" --ref-fai "$LOCAL_FAI" | gzip > "$LOCAL_TMP/output.pileup.gz"
 
         # Copy final result to network storage
         echo "Copying merged result to final destination..."
