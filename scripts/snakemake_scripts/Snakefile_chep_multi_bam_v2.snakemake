@@ -68,6 +68,32 @@ def get_reference_size_gb():
     except:
         return GENOME_SIZE_GB
 
+def estimate_merge_memory_mb(wildcards, attempt=1):
+    """
+    Estimate memory for merging pileup files based on reference genome size.
+    
+    Empirical observation: C++ merge uses ~122 bytes per genomic position with string interning.
+    
+    Memory breakdown per position:
+    - PosKey (chrom_id + pos + ref): ~7 bytes (with padding)
+    - PileupData (depth + bases + quals strings): ~68 bytes
+    - std::map overhead (tree pointers): ~40 bytes
+    - Total: ~115-125 bytes per position
+    
+    For a 3GB genome:
+    - Assume 50% coverage: 1.5 billion positions
+    - 1.5B × 122 bytes = ~183 GB
+    
+    Estimate: Reference size (GB) × 60 GB/GB (assumes 50% genome coverage)
+    Add 20% safety margin and scale with retry attempts.
+    """
+    ref_size_gb = get_reference_size_gb()
+    base_mem_gb = ref_size_gb * 60  # 60 GB per GB of reference
+    base_mem_mb = int(base_mem_gb * 1024)
+    
+    # Add 20% safety margin and scale with attempts
+    return int(base_mem_mb * 1.2) * attempt
+
 def estimate_mem_mb_base(attempt=1):
     """Base memory estimate for mpileup based on reference size"""
     ref_size_gb = get_reference_size_gb()
@@ -294,7 +320,7 @@ rule merge_batch_pileups:
         pileup_dir = lambda wc: WORKDIR + "/batch_pileups_tmp/" + wc.batch_id
     threads: 1  # Single threaded merge
     resources:
-        mem_mb = lambda wildcards, attempt: 20000 * attempt,  # C++ uses ~5x less RAM than Python
+        mem_mb = estimate_merge_memory_mb,  # Based on reference genome size (~122 bytes/position)
         runtime = lambda wildcards, attempt: 180 * attempt  # 3 hours - C++ is much faster
     shell:
         """
