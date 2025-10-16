@@ -1,5 +1,11 @@
 CPPF=-O3 -std=c++17
 
+# For portable binaries (compile once, run anywhere), use:
+# make STATIC=1
+ifdef STATIC
+CPPF += -static-libgcc -static-libstdc++
+endif
+
 all: bin bin/chep_pileup_to_array bin/chep_windowed_het bin/chep_plot bin/chep_gff2all bin/chep_genome_analysis bin/merge_pileups
 
 bin:
