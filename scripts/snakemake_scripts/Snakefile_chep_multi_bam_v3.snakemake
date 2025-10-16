@@ -1,0 +1,189 @@
+"""
+Snakemake workflow for hierarchical BAM merging (v3).
+Strategy: Two-level merge using sqrt(N) batches for balanced merging.
+
+Level 1: Merge N BAMs into sqrt(N) batch BAMs
+Level 2: Merge sqrt(N) batch BAMs into 1 final BAM
+
+Usage:
+    snakemake -s Snakefile_chep_multi_bam_v3.snakemake \
+        --config ref=reference.fa bam_list=bam_list.txt output=merged.bam \
+        --executor slurm --jobs 100
+"""
+
+import os
+import math
+from pathlib import Path
+
+# Get config parameters
+REF = config.get("ref", "reference.fa")
+BAM_LIST = config.get("bam_list", "bam_list.txt")
+OUTPUT = config.get("output", "merged_all.bam")
+WORKDIR = config.get("workdir", "chep_merge_work")
+
+# Get the directory containing this Snakefile
+SNAKEFILE_DIR = Path(workflow.basedir)
+
+# Read BAM file list
+with open(BAM_LIST) as f:
+    BAMS = [line.strip() for line in f if line.strip()]
+
+NUM_BAMS = len(BAMS)
+
+# Calculate optimal batch size (square root of total BAMs)
+BATCH_SIZE = max(2, int(math.sqrt(NUM_BAMS)))
+NUM_BATCHES = math.ceil(NUM_BAMS / BATCH_SIZE)
+
+print(f"Total BAMs: {NUM_BAMS}")
+print(f"Batch size: {BATCH_SIZE}")
+print(f"Number of batches: {NUM_BATCHES}")
+
+BAM_IDS = [f"bam_{i:04d}" for i in range(NUM_BAMS)]
+BATCH_IDS = [f"batch_{i:04d}" for i in range(NUM_BATCHES)]
+
+def get_bams_for_batch(batch_id):
+    """Get list of BAM files for a given batch"""
+    batch_num = int(batch_id.split("_")[1])
+    start_idx = batch_num * BATCH_SIZE
+    end_idx = min(start_idx + BATCH_SIZE, NUM_BAMS)
+    return BAMS[start_idx:end_idx]
+
+# Create work directories
+os.makedirs(WORKDIR, exist_ok=True)
+os.makedirs(WORKDIR + "/batch_bams", exist_ok=True)
+
+# Wildcard constraints
+wildcard_constraints:
+    batch_id = r"batch_\d+"
+
+rule all:
+    input:
+        OUTPUT
+
+rule merge_batch_bams:
+    """
+    Merge a batch of BAMs into a single batch BAM.
+    Uses local tmpdir for fast I/O.
+    """
+    input:
+        bams = lambda wc: get_bams_for_batch(wc.batch_id)
+    output:
+        bam = WORKDIR + "/batch_bams/{batch_id}.bam",
+        bai = WORKDIR + "/batch_bams/{batch_id}.bam.bai"
+    params:
+        batch_id = "{batch_id}",
+        num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id))
+    threads: 4
+    retries: 2
+    resources:
+        mem_mb = lambda wildcards, attempt: max(8000, len(get_bams_for_batch(wildcards.batch_id)) * 500) * attempt,
+        runtime = lambda wildcards, attempt: 120 * attempt
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_batch_merge_XXXXXX")
+        mkdir -p "$LOCAL_TMP/bams"
+
+        echo "Merging {params.batch_id} with {params.num_bams} BAMs..."
+        echo "Working directory: $LOCAL_TMP"
+
+        # Copy BAMs to local tmpdir with unique names
+        BAM_LIST="$LOCAL_TMP/bam_list.txt"
+        counter=0
+        for bam in {input.bams}; do
+            counter=$((counter + 1))
+            LOCAL_BAM="$LOCAL_TMP/bams/bam_${{counter}}.bam"
+            echo "  Copying BAM $counter to tmpdir..."
+            cp "$bam" "$LOCAL_BAM"
+
+            # Copy or create index
+            if [ -f "${{bam}}.bai" ]; then
+                cp "${{bam}}.bai" "${{LOCAL_BAM}}.bai"
+            else
+                echo "  Creating index for BAM $counter..."
+                samtools index "$LOCAL_BAM"
+            fi
+
+            echo "$LOCAL_BAM" >> "$BAM_LIST"
+        done
+
+        # Merge BAMs
+        echo "Merging {params.num_bams} BAMs in {params.batch_id}..."
+        LOCAL_OUT="$LOCAL_TMP/merged.bam"
+        samtools merge -@ {threads} -b "$BAM_LIST" "$LOCAL_OUT"
+
+        # Index the merged BAM
+        echo "Indexing merged BAM..."
+        samtools index "$LOCAL_OUT"
+
+        # Copy results back
+        echo "Copying merged BAM to output directory..."
+        mkdir -p $(dirname {output.bam})
+        cp "$LOCAL_OUT" {output.bam}
+        cp "${{LOCAL_OUT}}.bai" {output.bai}
+
+        # Cleanup
+        rm -rf "$LOCAL_TMP"
+
+        echo "Completed merge for {params.batch_id}"
+        """
+
+rule merge_all_batches:
+    """
+    Merge all batch BAMs into final output BAM.
+    Uses local tmpdir for fast I/O.
+    """
+    input:
+        bams = expand(WORKDIR + "/batch_bams/{batch_id}.bam", batch_id=BATCH_IDS),
+        bais = expand(WORKDIR + "/batch_bams/{batch_id}.bam.bai", batch_id=BATCH_IDS)
+    output:
+        bam = OUTPUT,
+        bai = OUTPUT + ".bai"
+    params:
+        num_batches = NUM_BATCHES
+    threads: 8
+    retries: 2
+    resources:
+        mem_mb = lambda wildcards, attempt: max(16000, NUM_BATCHES * 1000) * attempt,
+        runtime = lambda wildcards, attempt: 180 * attempt
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_final_merge_XXXXXX")
+        mkdir -p "$LOCAL_TMP/bams"
+
+        echo "Merging {params.num_batches} batch BAMs into final output..."
+        echo "Working directory: $LOCAL_TMP"
+
+        # Copy batch BAMs to local tmpdir
+        BAM_LIST="$LOCAL_TMP/bam_list.txt"
+        counter=0
+        for bam in {input.bams}; do
+            counter=$((counter + 1))
+            LOCAL_BAM="$LOCAL_TMP/bams/batch_${{counter}}.bam"
+            echo "  Copying batch BAM $counter to tmpdir..."
+            cp "$bam" "$LOCAL_BAM"
+            cp "${{bam}}.bai" "${{LOCAL_BAM}}.bai"
+            echo "$LOCAL_BAM" >> "$BAM_LIST"
+        done
+
+        # Final merge
+        echo "Merging {params.num_batches} batch BAMs..."
+        LOCAL_OUT="$LOCAL_TMP/final_merged.bam"
+        samtools merge -@ {threads} -b "$BAM_LIST" "$LOCAL_OUT"
+
+        # Index the final BAM
+        echo "Indexing final merged BAM..."
+        samtools index "$LOCAL_OUT"
+
+        # Copy results back
+        echo "Copying final merged BAM to output directory..."
+        mkdir -p $(dirname {output.bam})
+        cp "$LOCAL_OUT" {output.bam}
+        cp "${{LOCAL_OUT}}.bai" {output.bai}
+
+        # Cleanup
+        rm -rf "$LOCAL_TMP"
+
+        echo "Final merge complete: {output.bam}"
+        """

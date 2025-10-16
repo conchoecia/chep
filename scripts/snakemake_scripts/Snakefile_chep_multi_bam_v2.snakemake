@@ -53,7 +53,7 @@ def get_bams_for_batch(batch_id):
 def get_pileup_files_for_batch(batch_id):
     """Get list of expected pileup files for a given batch"""
     num_bams = len(get_bams_for_batch(batch_id))
-    return expand(WORKDIR + "/batch_pileups_tmp/{batch_id}/bam_{i}.pileup.gz", 
+    return expand(WORKDIR + "/batch_pileups_tmp/{batch_id}/bam_{i}.pileup.gz",
                   batch_id=batch_id, i=range(1, num_bams + 1))
 
 # Create work directories
@@ -80,15 +80,15 @@ def estimate_merge_memory_mb(wildcards, attempt=1):
     - std::map overhead (tree pointers): ~40 bytes
     - Total: ~115-125 bytes per position
     
-    For a 3GB genome:
-    - Assume 50% coverage: 1.5 billion positions
-    - 1.5B × 122 bytes = ~183 GB
+    For a 3GB genome with high coverage:
+    - Assume 70% coverage: 2.1 billion positions
+    - 2.1B × 122 bytes = ~256 GB
     
-    Estimate: Reference size (GB) × 60 GB/GB (assumes 50% genome coverage)
+    Estimate: Reference size (GB) × 100 GB/GB (conservative, assumes 70-80% genome coverage)
     Add 20% safety margin and scale with retry attempts.
     """
     ref_size_gb = get_reference_size_gb()
-    base_mem_gb = ref_size_gb * 60  # 60 GB per GB of reference
+    base_mem_gb = ref_size_gb * 100  # 100 GB per GB of reference
     base_mem_mb = int(base_mem_gb * 1024)
     
     # Add 20% safety margin and scale with attempts
@@ -237,8 +237,9 @@ rule mpileup_batch_parallel:
         num_bams = lambda wc: len(get_bams_for_batch(wc.batch_id)),
         output_dir = lambda wc: WORKDIR + "/batch_pileups_tmp/" + wc.batch_id
     threads: lambda wildcards: len(get_bams_for_batch(wildcards.batch_id))  # One thread per BAM
+    retries: 3  # Retry up to 3 times on failure (e.g., OOM)
     resources:
-        mem_mb = lambda wildcards, attempt: max(12000, len(get_bams_for_batch(wildcards.batch_id)) * 2000) * attempt,
+        mem_mb = lambda wildcards, attempt: max(20000, len(get_bams_for_batch(wildcards.batch_id)) * 4000) * attempt,
         runtime = lambda wildcards, attempt: 90 * attempt
     shell:
         """
@@ -319,6 +320,7 @@ rule merge_batch_pileups:
         batch_id = "{batch_id}",
         pileup_dir = lambda wc: WORKDIR + "/batch_pileups_tmp/" + wc.batch_id
     threads: 1  # Single threaded merge
+    retries: 3  # Retry up to 3 times on OOM
     resources:
         mem_mb = estimate_merge_memory_mb,  # Based on reference genome size (~122 bytes/position)
         runtime = lambda wildcards, attempt: 180 * attempt  # 3 hours - C++ is much faster
