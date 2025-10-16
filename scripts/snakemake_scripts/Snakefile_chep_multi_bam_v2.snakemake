@@ -28,6 +28,7 @@ CHEP_SCRIPTS = SNAKEFILE_DIR.parent
 
 # Path to executables
 CHEP_PILEUP_TO_ARRAY = CHEP_BIN / "chep_pileup_to_array"
+CHEP_MERGE_PILEUPS = CHEP_BIN / "merge_pileups"
 CHEP_PLOT = CHEP_BIN / "chep_plot"
 
 # Read BAM file list
@@ -293,7 +294,7 @@ rule merge_batch_pileups:
         pileup_dir = lambda wc: WORKDIR + "/batch_pileups_tmp/" + wc.batch_id
     threads: 1  # Single threaded merge
     resources:
-        mem_mb = lambda wildcards, attempt: 8000 * attempt,  # C++ uses ~5x less RAM than Python
+        mem_mb = lambda wildcards, attempt: 20000 * attempt,  # C++ uses ~5x less RAM than Python
         runtime = lambda wildcards, attempt: 180 * attempt  # 3 hours - C++ is much faster
     shell:
         """
@@ -325,7 +326,7 @@ rule merge_batch_pileups:
 
         # Merge all pileups using C++ merge_pileups with reference order
         # Do merge in tmpdir and write output there
-        {CHEP_PILEUP_TO_ARRAY}/../merge_pileups "$LOCAL_TMP/pileups" --ref-fai "$LOCAL_FAI" | gzip > "$LOCAL_TMP/output.pileup.gz"
+        {CHEP_MERGE_PILEUPS} "$LOCAL_TMP/pileups" --ref-fai "$LOCAL_FAI" | gzip > "$LOCAL_TMP/output.pileup.gz"
 
         # Copy final result to network storage
         echo "Copying merged result to final destination..."
