@@ -71,6 +71,34 @@ std::string format_bytes_per_position(size_t positions, double memory_mb) {
     return oss.str();
 }
 
+// String interning for chromosome names
+class StringInterner {
+private:
+    std::vector<std::string> strings_;
+    std::unordered_map<std::string, uint16_t> string_to_id_;
+    
+public:
+    uint16_t get_id(const std::string& s) {
+        auto it = string_to_id_.find(s);
+        if (it != string_to_id_.end()) {
+            return it->second;
+        }
+        
+        uint16_t id = static_cast<uint16_t>(strings_.size());
+        strings_.push_back(s);
+        string_to_id_[s] = id;
+        return id;
+    }
+    
+    const std::string& get_string(uint16_t id) const {
+        return strings_[id];
+    }
+    
+    size_t size() const {
+        return strings_.size();
+    }
+};
+
 // Structure to hold pileup data for a single position
 struct PileupData {
     int depth;
@@ -90,28 +118,37 @@ struct PileupData {
     }
 };
 
-// Key for a genomic position
+// Key for a genomic position (using interned chromosome ID)
 struct PosKey {
-    std::string chrom;
+    uint16_t chrom_id;  // Interned chromosome ID instead of string
     int pos;
     char ref;
     
     bool operator<(const PosKey& other) const {
-        if (chrom != other.chrom) return chrom < other.chrom;
+        if (chrom_id != other.chrom_id) return chrom_id < other.chrom_id;
         if (pos != other.pos) return pos < other.pos;
         return ref < other.ref;
+    }
+};
+
+// Hash function for PosKey (for unordered_map if needed)
+struct PosKeyHash {
+    std::size_t operator()(const PosKey& k) const {
+        return (std::hash<uint16_t>()(k.chrom_id) ^ 
+                (std::hash<int>()(k.pos) << 1)) ^ 
+                (std::hash<char>()(k.ref) << 2);
     }
 };
 
 // Custom comparator that uses chromosome order from .fai file
 class ChromComparator {
 private:
-    std::unordered_map<std::string, int> chrom_order_;
+    std::unordered_map<uint16_t, int> chrom_order_;  // Use IDs instead of strings
     
 public:
     ChromComparator() {}
     
-    ChromComparator(const std::unordered_map<std::string, int>& order) 
+    ChromComparator(const std::unordered_map<uint16_t, int>& order) 
         : chrom_order_(order) {}
     
     bool operator()(const PosKey& a, const PosKey& b) const {
@@ -119,12 +156,12 @@ public:
         int order_a = 1000000; // Default for unknown chroms
         int order_b = 1000000;
         
-        auto it_a = chrom_order_.find(a.chrom);
+        auto it_a = chrom_order_.find(a.chrom_id);
         if (it_a != chrom_order_.end()) {
             order_a = it_a->second;
         }
         
-        auto it_b = chrom_order_.find(b.chrom);
+        auto it_b = chrom_order_.find(b.chrom_id);
         if (it_b != chrom_order_.end()) {
             order_b = it_b->second;
         }
@@ -136,8 +173,9 @@ public:
 };
 
 // Read chromosome order from .fai file
-std::unordered_map<std::string, int> read_chrom_order(const std::string& fai_file) {
-    std::unordered_map<std::string, int> chrom_order;
+std::unordered_map<uint16_t, int> read_chrom_order(const std::string& fai_file,
+                                                     StringInterner& interner) {
+    std::unordered_map<uint16_t, int> chrom_order;
     std::ifstream infile(fai_file);
     
     if (!infile.is_open()) {
@@ -151,7 +189,8 @@ std::unordered_map<std::string, int> read_chrom_order(const std::string& fai_fil
         size_t tab_pos = line.find('\t');
         if (tab_pos != std::string::npos) {
             std::string chrom = line.substr(0, tab_pos);
-            chrom_order[chrom] = idx++;
+            uint16_t chrom_id = interner.get_id(chrom);
+            chrom_order[chrom_id] = idx++;
         }
     }
     
@@ -177,7 +216,7 @@ bool gzgetline(gzFile file, std::string& line) {
 
 // Parse a pileup line
 bool parse_pileup_line(const std::string& line, PosKey& key, int& depth, 
-                       std::string& bases, std::string& quals) {
+                       std::string& bases, std::string& quals, StringInterner& interner) {
     std::istringstream iss(line);
     std::string chrom, ref_str, depth_str, bases_str, quals_str;
     int pos;
@@ -191,8 +230,8 @@ bool parse_pileup_line(const std::string& line, PosKey& key, int& depth,
     std::getline(iss, bases_str, '\t'); // Skip to bases column
     std::getline(iss, quals_str);
     
-    // Parse
-    key.chrom = chrom;
+    // Parse - use interned chromosome ID
+    key.chrom_id = interner.get_id(chrom);
     key.pos = pos;
     key.ref = ref_str.empty() ? 'N' : ref_str[0];
     depth = std::stoi(depth_str);
@@ -213,7 +252,8 @@ bool parse_pileup_line(const std::string& line, PosKey& key, int& depth,
 // Process a single pileup file
 void process_pileup_file(const std::string& filepath, 
                          std::map<PosKey, PileupData>& positions,
-                         size_t& lines_read) {
+                         size_t& lines_read,
+                         StringInterner& interner) {
     bool is_gzipped = (filepath.size() > 3 && 
                       filepath.substr(filepath.size() - 3) == ".gz");
     
@@ -235,10 +275,10 @@ void process_pileup_file(const std::string& filepath,
             int depth;
             std::string bases, quals;
             
-            if (parse_pileup_line(line, key, depth, bases, quals)) {
+            if (parse_pileup_line(line, key, depth, bases, quals, interner)) {
                 positions[key].add(depth, bases, quals);
                 lines_read++;
-                last_chrom = key.chrom;
+                last_chrom = interner.get_string(key.chrom_id);
                 
                 // Report progress every 2M lines
                 if (lines_read - last_report >= REPORT_INTERVAL) {
@@ -269,10 +309,10 @@ void process_pileup_file(const std::string& filepath,
             int depth;
             std::string bases, quals;
             
-            if (parse_pileup_line(line, key, depth, bases, quals)) {
+            if (parse_pileup_line(line, key, depth, bases, quals, interner)) {
                 positions[key].add(depth, bases, quals);
                 lines_read++;
-                last_chrom = key.chrom;
+                last_chrom = interner.get_string(key.chrom_id);
                 
                 // Report progress every 2M lines
                 if (lines_read - last_report >= REPORT_INTERVAL) {
@@ -308,11 +348,14 @@ int main(int argc, char* argv[]) {
         }
     }
     
+    // Create string interner for chromosome names
+    StringInterner interner;
+    
     // Read chromosome order if provided
-    std::unordered_map<std::string, int> chrom_order;
+    std::unordered_map<uint16_t, int> chrom_order;
     bool use_chrom_order = false;
     if (!fai_file.empty()) {
-        chrom_order = read_chrom_order(fai_file);
+        chrom_order = read_chrom_order(fai_file, interner);
         use_chrom_order = !chrom_order.empty();
     }
     
@@ -353,7 +396,7 @@ int main(int argc, char* argv[]) {
         
         size_t lines_before = total_lines;
         size_t positions_before = positions.size();
-        process_pileup_file(pileup_files[i], positions, total_lines);
+        process_pileup_file(pileup_files[i], positions, total_lines, interner);
         
         size_t lines_added = total_lines - lines_before;
         size_t positions_added = positions.size() - positions_before;
@@ -405,21 +448,22 @@ int main(int argc, char* argv[]) {
         std::string last_chrom;
         size_t chrom_count = 0;
         for (const auto& [key, data] : sorted_positions) {
-            if (key.chrom != last_chrom) {
+            std::string chrom = interner.get_string(key.chrom_id);
+            if (chrom != last_chrom) {
                 if (!last_chrom.empty()) {
                     std::cerr << "  Wrote " << last_chrom << ": " 
                               << chrom_count << " positions" << std::endl;
                 }
-                last_chrom = key.chrom;
+                last_chrom = chrom;
                 chrom_count = 0;
-                std::cerr << "Writing chromosome: " << key.chrom << "..." << std::endl;
+                std::cerr << "Writing chromosome: " << chrom << "..." << std::endl;
             }
             chrom_count++;
             
             std::string bases = data.bases.empty() ? "*" : data.bases;
             std::string quals = data.quals.empty() ? "*" : data.quals;
             
-            std::cout << key.chrom << '\t' << key.pos << '\t' << key.ref << '\t'
+            std::cout << chrom << '\t' << key.pos << '\t' << key.ref << '\t'
                       << data.depth << '\t' << bases << '\t' << quals << '\n';
         }
         
@@ -432,21 +476,22 @@ int main(int argc, char* argv[]) {
         std::string last_chrom;
         size_t chrom_count = 0;
         for (const auto& [key, data] : positions) {
-            if (key.chrom != last_chrom) {
+            std::string chrom = interner.get_string(key.chrom_id);
+            if (chrom != last_chrom) {
                 if (!last_chrom.empty()) {
                     std::cerr << "  Wrote " << last_chrom << ": " 
                               << chrom_count << " positions" << std::endl;
                 }
-                last_chrom = key.chrom;
+                last_chrom = chrom;
                 chrom_count = 0;
-                std::cerr << "Writing chromosome: " << key.chrom << "..." << std::endl;
+                std::cerr << "Writing chromosome: " << chrom << "..." << std::endl;
             }
             chrom_count++;
             
             std::string bases = data.bases.empty() ? "*" : data.bases;
             std::string quals = data.quals.empty() ? "*" : data.quals;
             
-            std::cout << key.chrom << '\t' << key.pos << '\t' << key.ref << '\t'
+            std::cout << chrom << '\t' << key.pos << '\t' << key.ref << '\t'
                       << data.depth << '\t' << bases << '\t' << quals << '\n';
         }
         
