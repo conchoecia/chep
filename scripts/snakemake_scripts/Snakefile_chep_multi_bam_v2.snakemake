@@ -277,8 +277,10 @@ rule mpileup_batch_parallel:
 
 rule merge_batch_pileups:
     """
+rule merge_batch_pileups:
+    """
     Merge individual pileup files from parallel mpileup into single compressed file.
-    Uses in-memory merge for guaranteed correct sorting.
+    Uses C++ merge_pileups for fast, memory-efficient merging (~5x less RAM than Python).
     Runs as separate job to free up threads from parallel mpileup.
     Copies pileup files to tmpdir for fast local I/O to avoid network storage bottleneck.
     """
@@ -293,8 +295,8 @@ rule merge_batch_pileups:
         pileup_dir = lambda wc: WORKDIR + "/batch_pileups_tmp/" + wc.batch_id
     threads: 1  # Single threaded merge
     resources:
-        mem_mb = lambda wildcards, attempt: 20000 * attempt,  # 20GB at first
-        runtime = lambda wildcards, attempt: 360 * attempt  # 6 hours for merge - better safe than sorry
+        mem_mb = lambda wildcards, attempt: 8000 * attempt,  # C++ uses ~5x less RAM than Python
+        runtime = lambda wildcards, attempt: 180 * attempt  # 3 hours - C++ is much faster
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
@@ -323,9 +325,9 @@ rule merge_batch_pileups:
             samtools faidx "$LOCAL_REF"
         fi
 
-        # Merge all pileups using Python in-memory merge script with reference order
+        # Merge all pileups using C++ merge_pileups with reference order
         # Do merge in tmpdir and write output there
-        python3 {CHEP_SCRIPTS}/merge_pileups.py "$LOCAL_TMP/pileups" --ref-fai "$LOCAL_FAI" | gzip > "$LOCAL_TMP/output.pileup.gz"
+        {CHEP_PILEUP_TO_ARRAY}/../merge_pileups "$LOCAL_TMP/pileups" --ref-fai "$LOCAL_FAI" | gzip > "$LOCAL_TMP/output.pileup.gz"
 
         # Copy final result to network storage
         echo "Copying merged result to final destination..."

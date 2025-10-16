@@ -65,7 +65,11 @@ def get_chromosomes_from_files(pileup_files):
     Returns set of chromosome names.
     """
     chroms = set()
-    for pfile in pileup_files:
+    total_files = len(pileup_files)
+    
+    for idx, pfile in enumerate(pileup_files, 1):
+        print("  Scanning file " + str(idx) + "/" + str(total_files) + ": " + os.path.basename(pfile), file=sys.stderr)
+        
         if pfile.endswith('.gz'):
             fh = gzip.open(pfile, 'rt')
         else:
@@ -75,6 +79,8 @@ def get_chromosomes_from_files(pileup_files):
             chrom = line.split('\t', 1)[0]
             chroms.add(chrom)
         fh.close()
+        
+        print("    Found " + str(len(chroms)) + " unique chromosomes so far", file=sys.stderr)
     
     return chroms
 

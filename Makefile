@@ -1,6 +1,6 @@
-CPPF=-O3 -std=c++11
+CPPF=-O3 -std=c++17
 
-all: bin bin/chep_pileup_to_array bin/chep_windowed_het bin/chep_plot bin/chep_gff2all bin/chep_genome_analysis
+all: bin bin/chep_pileup_to_array bin/chep_windowed_het bin/chep_plot bin/chep_gff2all bin/chep_genome_analysis bin/merge_pileups
 
 bin:
 	mkdir bin
@@ -10,6 +10,9 @@ bin/chep_pileup_to_array: src/pileup_to_array.cpp src/pileup_to_array.hpp
 
 bin/chep_windowed_het: src/windowed_het.cpp src/windowed_het.hpp
 	g++ ${CPPF} -o bin/chep_windowed_het src/windowed_het.cpp
+
+bin/merge_pileups: src/merge_pileups.cpp
+	g++ ${CPPF} -o bin/merge_pileups src/merge_pileups.cpp -lz
 
 bin/chep_plot: scripts/heterozygosity_matrix.py
 	chmod ugo+x scripts/heterozygosity_matrix.py; \
