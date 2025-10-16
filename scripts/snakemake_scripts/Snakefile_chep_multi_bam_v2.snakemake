@@ -277,8 +277,6 @@ rule mpileup_batch_parallel:
 
 rule merge_batch_pileups:
     """
-rule merge_batch_pileups:
-    """
     Merge individual pileup files from parallel mpileup into single compressed file.
     Uses C++ merge_pileups for fast, memory-efficient merging (~5x less RAM than Python).
     Runs as separate job to free up threads from parallel mpileup.
