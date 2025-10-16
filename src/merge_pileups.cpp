@@ -217,6 +217,10 @@ void process_pileup_file(const std::string& filepath,
     bool is_gzipped = (filepath.size() > 3 && 
                       filepath.substr(filepath.size() - 3) == ".gz");
     
+    size_t lines_at_start = lines_read;
+    size_t last_report = lines_read;
+    const size_t REPORT_INTERVAL = 1000000;  // Report every 1M lines
+    
     if (is_gzipped) {
         gzFile file = gzopen(filepath.c_str(), "rb");
         if (!file) {
@@ -233,6 +237,14 @@ void process_pileup_file(const std::string& filepath,
             if (parse_pileup_line(line, key, depth, bases, quals)) {
                 positions[key].add(depth, bases, quals);
                 lines_read++;
+                
+                // Report progress every 1M lines
+                if (lines_read - last_report >= REPORT_INTERVAL) {
+                    std::cerr << "    ... " << (lines_read - lines_at_start) / 1000000 
+                              << "M lines read, " << positions.size() 
+                              << " total unique positions" << std::endl;
+                    last_report = lines_read;
+                }
             }
         }
         
@@ -253,6 +265,14 @@ void process_pileup_file(const std::string& filepath,
             if (parse_pileup_line(line, key, depth, bases, quals)) {
                 positions[key].add(depth, bases, quals);
                 lines_read++;
+                
+                // Report progress every 1M lines
+                if (lines_read - last_report >= REPORT_INTERVAL) {
+                    std::cerr << "    ... " << (lines_read - lines_at_start) / 1000000 
+                              << "M lines read, " << positions.size() 
+                              << " total unique positions" << std::endl;
+                    last_report = lines_read;
+                }
             }
         }
     }
