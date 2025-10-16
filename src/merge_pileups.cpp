@@ -24,11 +24,10 @@
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
-#include <filesystem>
 #include <cstring>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <zlib.h>
-
-namespace fs = std::filesystem;
 
 // Structure to hold pileup data for a single position
 struct PileupData {
@@ -242,21 +241,31 @@ int main(int argc, char* argv[]) {
         use_chrom_order = !chrom_order.empty();
     }
     
-    // Find all pileup files
+    // Find all pileup files using POSIX dirent (C++11 compatible)
     std::vector<std::string> pileup_files;
-    try {
-        for (const auto& entry : fs::directory_iterator(pileup_dir)) {
-            std::string path = entry.path().string();
-            if (path.size() > 7 && path.substr(path.size() - 7) == ".pileup") {
-                pileup_files.push_back(path);
-            } else if (path.size() > 10 && path.substr(path.size() - 10) == ".pileup.gz") {
-                pileup_files.push_back(path);
-            }
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "Error reading directory: " << e.what() << std::endl;
+    DIR* dir = opendir(pileup_dir.c_str());
+    if (dir == NULL) {
+        std::cerr << "Error: Could not open directory: " << pileup_dir << std::endl;
         return 1;
     }
+    
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        std::string filename = entry->d_name;
+        
+        // Skip . and ..
+        if (filename == "." || filename == "..") {
+            continue;
+        }
+        
+        // Check if it ends with .pileup or .pileup.gz
+        if (filename.size() > 7 && filename.substr(filename.size() - 7) == ".pileup") {
+            pileup_files.push_back(pileup_dir + "/" + filename);
+        } else if (filename.size() > 10 && filename.substr(filename.size() - 10) == ".pileup.gz") {
+            pileup_files.push_back(pileup_dir + "/" + filename);
+        }
+    }
+    closedir(dir);
     
     if (pileup_files.empty()) {
         std::cerr << "Warning: No pileup files found in " << pileup_dir << std::endl;
@@ -272,7 +281,11 @@ int main(int argc, char* argv[]) {
     
     // Process each file
     for (size_t i = 0; i < pileup_files.size(); i++) {
-        std::string filename = fs::path(pileup_files[i]).filename().string();
+        // Extract filename from path (simple basename)
+        std::string filepath = pileup_files[i];
+        size_t last_slash = filepath.find_last_of("/\\");
+        std::string filename = (last_slash == std::string::npos) ? filepath : filepath.substr(last_slash + 1);
+        
         std::cerr << "Reading file " << (i + 1) << "/" << pileup_files.size() 
                   << ": " << filename << "..." << std::endl;
         
