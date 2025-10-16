@@ -219,7 +219,8 @@ void process_pileup_file(const std::string& filepath,
     
     size_t lines_at_start = lines_read;
     size_t last_report = lines_read;
-    const size_t REPORT_INTERVAL = 1000000;  // Report every 1M lines
+    const size_t REPORT_INTERVAL = 2000000;  // Report every 2M lines
+    std::string last_chrom;
     
     if (is_gzipped) {
         gzFile file = gzopen(filepath.c_str(), "rb");
@@ -237,12 +238,18 @@ void process_pileup_file(const std::string& filepath,
             if (parse_pileup_line(line, key, depth, bases, quals)) {
                 positions[key].add(depth, bases, quals);
                 lines_read++;
+                last_chrom = key.chrom;
                 
-                // Report progress every 1M lines
+                // Report progress every 2M lines
                 if (lines_read - last_report >= REPORT_INTERVAL) {
+                    double mem_mb = get_memory_usage_mb();
+                    std::string mem_str = (mem_mb >= 0) ? 
+                        (std::to_string(static_cast<int>(mem_mb)) + " MB") : "unknown";
+                    
                     std::cerr << "    ... " << (lines_read - lines_at_start) / 1000000 
-                              << "M lines read, " << positions.size() 
-                              << " total unique positions" << std::endl;
+                              << "M lines, chrom: " << last_chrom 
+                              << ", positions: " << positions.size()
+                              << ", RAM: " << mem_str << std::endl;
                     last_report = lines_read;
                 }
             }
@@ -265,12 +272,18 @@ void process_pileup_file(const std::string& filepath,
             if (parse_pileup_line(line, key, depth, bases, quals)) {
                 positions[key].add(depth, bases, quals);
                 lines_read++;
+                last_chrom = key.chrom;
                 
-                // Report progress every 1M lines
+                // Report progress every 2M lines
                 if (lines_read - last_report >= REPORT_INTERVAL) {
+                    double mem_mb = get_memory_usage_mb();
+                    std::string mem_str = (mem_mb >= 0) ? 
+                        (std::to_string(static_cast<int>(mem_mb)) + " MB") : "unknown";
+                    
                     std::cerr << "    ... " << (lines_read - lines_at_start) / 1000000 
-                              << "M lines read, " << positions.size() 
-                              << " total unique positions" << std::endl;
+                              << "M lines, chrom: " << last_chrom 
+                              << ", positions: " << positions.size()
+                              << ", RAM: " << mem_str << std::endl;
                     last_report = lines_read;
                 }
             }
