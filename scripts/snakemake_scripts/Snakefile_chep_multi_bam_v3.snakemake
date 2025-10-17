@@ -76,13 +76,13 @@ def estimate_index_runtime(attempt=1):
     """
     Estimate runtime for indexing final merged BAM based on number of BAMs.
     
-    Empirical observation: Indexing 768 merged BAMs takes ~2-3 hours.
+    Empirical observation: Indexing 768 merged BAMs takes longer than initially expected.
     
     Runtime scales with the size of the final merged BAM, which is roughly
     proportional to the number of input BAMs.
     """
-    # Base runtime for 768 BAMs is ~180 minutes (3 hours) for indexing
-    base_runtime = (NUM_BAMS / 768.0) * 180
+    # Base runtime for 768 BAMs is ~360 minutes (6 hours) for indexing
+    base_runtime = (NUM_BAMS / 768.0) * 360
     
     # Add 50% safety margin
     safe_runtime = int(base_runtime * 1.5)
@@ -101,7 +101,6 @@ wildcard_constraints:
 rule all:
     input:
         WORKDIR + "/merged_all.bam.bai"
-
 
 rule merge_batch_bams:
     """
