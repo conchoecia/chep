@@ -48,6 +48,48 @@ def get_bams_for_batch(batch_id):
     end_idx = min(start_idx + BATCH_SIZE, NUM_BAMS)
     return BAMS[start_idx:end_idx]
 
+def estimate_final_merge_runtime(attempt=1):
+    """
+    Estimate runtime for final merge based on number of BAMs.
+    
+    Empirical observation: 768 BAMs takes ~9 hours (540 minutes) for merge only.
+    (Indexing is done separately in its own rule)
+    
+    This includes:
+    - Copying batch BAMs to tmpdir
+    - Merging all batch BAMs
+    - Copying back to network storage
+    
+    Runtime scales approximately linearly with number of BAMs.
+    Formula: (NUM_BAMS / 768) × 540 minutes × 1.4 safety margin
+    """
+    # Base runtime for 768 BAMs is 540 minutes (9 hours)
+    base_runtime = (NUM_BAMS / 768.0) * 540
+    
+    # Add 40% safety margin
+    safe_runtime = int(base_runtime * 1.4)
+    
+    # Scale with retry attempts
+    return safe_runtime * attempt
+
+def estimate_index_runtime(attempt=1):
+    """
+    Estimate runtime for indexing final merged BAM based on number of BAMs.
+    
+    Empirical observation: Indexing 768 merged BAMs takes ~2-3 hours.
+    
+    Runtime scales with the size of the final merged BAM, which is roughly
+    proportional to the number of input BAMs.
+    """
+    # Base runtime for 768 BAMs is ~180 minutes (3 hours) for indexing
+    base_runtime = (NUM_BAMS / 768.0) * 180
+    
+    # Add 50% safety margin
+    safe_runtime = int(base_runtime * 1.5)
+    
+    # Scale with retry attempts
+    return safe_runtime * attempt
+
 # Create work directories
 os.makedirs(WORKDIR, exist_ok=True)
 os.makedirs(WORKDIR + "/batch_bams", exist_ok=True)
@@ -58,7 +100,8 @@ wildcard_constraints:
 
 rule all:
     input:
-        OUTPUT
+        WORKDIR + "/merged_all.bam.bai"
+
 
 rule merge_batch_bams:
     """
@@ -132,20 +175,20 @@ rule merge_all_batches:
     """
     Merge all batch BAMs into final output BAM.
     Uses local tmpdir for fast I/O.
+    Does NOT index - that's done in a separate rule.
     """
     input:
         bams = expand(WORKDIR + "/batch_bams/{batch_id}.bam", batch_id=BATCH_IDS),
         bais = expand(WORKDIR + "/batch_bams/{batch_id}.bam.bai", batch_id=BATCH_IDS)
     output:
-        bam = OUTPUT,
-        bai = OUTPUT + ".bai"
+        bam = WORKDIR + "/merged_all.bam"
     params:
         num_batches = NUM_BATCHES
     threads: 8
     retries: 2
     resources:
         mem_mb = lambda wildcards, attempt: max(16000, NUM_BATCHES * 1000) * attempt,
-        runtime = lambda wildcards, attempt: 720 * attempt  # 12 hours
+        runtime = lambda wildcards, attempt: estimate_final_merge_runtime() * attempt
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
@@ -167,23 +210,60 @@ rule merge_all_batches:
             echo "$LOCAL_BAM" >> "$BAM_LIST"
         done
 
-        # Final merge
+        # Final merge (NO INDEXING - that's done separately)
         echo "Merging {params.num_batches} batch BAMs..."
         LOCAL_OUT="$LOCAL_TMP/final_merged.bam"
         samtools merge -@ {threads} -b "$BAM_LIST" "$LOCAL_OUT"
-
-        # Index the final BAM
-        echo "Indexing final merged BAM..."
-        samtools index "$LOCAL_OUT"
 
         # Copy results back
         echo "Copying final merged BAM to output directory..."
         mkdir -p $(dirname {output.bam})
         cp "$LOCAL_OUT" {output.bam}
-        cp "${{LOCAL_OUT}}.bai" {output.bai}
 
         # Cleanup
         rm -rf "$LOCAL_TMP"
 
         echo "Final merge complete: {output.bam}"
+        """
+
+rule index_final_bam:
+    """
+    Index the final merged BAM.
+    Separate from merge to allow better resource allocation.
+    """
+    input:
+        bam = WORKDIR + "/merged_all.bam"
+    output:
+        bai = WORKDIR + "/merged_all.bam.bai"
+    threads: 8
+    retries: 2
+    resources:
+        mem_mb = lambda wildcards, attempt: 4000 * attempt,
+        runtime = lambda wildcards, attempt: estimate_index_runtime() * attempt
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_index_XXXXXX")
+        
+        echo "Indexing final merged BAM: {input.bam}"
+        echo "Working directory: $LOCAL_TMP"
+        
+        # Copy BAM to local tmpdir for fast I/O
+        LOCAL_BAM="$LOCAL_TMP/merged.bam"
+        echo "Copying BAM to tmpdir..."
+        cp {input.bam} "$LOCAL_BAM"
+        
+        # Index the BAM
+        echo "Indexing BAM..."
+        samtools index -@ {threads} "$LOCAL_BAM"
+        
+        # Copy index back to output
+        echo "Copying index to output directory..."
+        mkdir -p $(dirname {output.bai})
+        cp "${{LOCAL_BAM}}.bai" {output.bai}
+        
+        # Cleanup
+        rm -rf "$LOCAL_TMP"
+        
+        echo "Indexing complete: {output.bai}"
         """
