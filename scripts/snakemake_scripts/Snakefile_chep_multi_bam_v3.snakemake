@@ -100,7 +100,7 @@ wildcard_constraints:
 
 rule all:
     input:
-        WORKDIR + "/merged_all.bam.bai"
+        WORKDIR + "/split_by_chrom/split.done"
 
 rule merge_batch_bams:
     """
@@ -229,12 +229,14 @@ rule index_final_bam:
     """
     Index the final merged BAM.
     Separate from merge to allow better resource allocation.
+    Note: samtools index uses 2 hidden threads, so we reserve 10 threads
+    from SLURM but only tell samtools to use 8.
     """
     input:
         bam = WORKDIR + "/merged_all.bam"
     output:
         bai = WORKDIR + "/merged_all.bam.bai"
-    threads: 8
+    threads: 10
     retries: 2
     resources:
         mem_mb = lambda wildcards, attempt: 4000 * attempt,
@@ -252,9 +254,9 @@ rule index_final_bam:
         echo "Copying BAM to tmpdir..."
         cp {input.bam} "$LOCAL_BAM"
         
-        # Index the BAM
+        # Index the BAM (use 8 threads, SLURM reserves 10 for the 2 hidden threads)
         echo "Indexing BAM..."
-        samtools index -@ {threads} "$LOCAL_BAM"
+        samtools index -@ 8 "$LOCAL_BAM"
         
         # Copy index back to output
         echo "Copying index to output directory..."
@@ -266,3 +268,116 @@ rule index_final_bam:
         
         echo "Indexing complete: {output.bai}"
         """
+
+checkpoint split_bam_by_chromosome:
+    """
+    Split the final merged BAM by chromosome.
+    Uses GNU parallel to split in parallel (8 jobs at a time).
+    Only processes chromosomes >= 50kbp in length.
+    Each chromosome gets its own BAM file and index.
+    
+    Note: This uses parallel with 8 jobs, each running samtools with 4 threads,
+    so it needs 8 threads reserved from SLURM (8 parallel jobs × 1 thread each,
+    since samtools threading is internal to each parallel job).
+    """
+    input:
+        bam = WORKDIR + "/merged_all.bam",
+        bai = WORKDIR + "/merged_all.bam.bai"
+    output:
+        done = WORKDIR + "/split_by_chrom/split.done"
+    params:
+        outdir = WORKDIR + "/split_by_chrom"
+    threads: 8
+    retries: 2
+    resources:
+        mem_mb = lambda wildcards, attempt: 8000 * attempt,
+        runtime = lambda wildcards, attempt: 240 * attempt  # 4 hours
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_split_XXXXXX")
+        
+        echo "Splitting BAM by chromosome (only >= 50kbp): {input.bam}"
+        echo "Working directory: $LOCAL_TMP"
+        
+        # Copy BAM and index to local tmpdir for fast I/O
+        LOCAL_BAM="$LOCAL_TMP/merged.bam"
+        echo "Copying BAM and index to tmpdir..."
+        cp {input.bam} "$LOCAL_BAM"
+        cp {input.bai} "${{LOCAL_BAM}}.bai"
+        
+        # Create local output directory
+        LOCAL_OUTDIR="$LOCAL_TMP/split_chroms"
+        mkdir -p "$LOCAL_OUTDIR"
+        
+        # Split by chromosome using parallel (only chromosomes >= 50000 bp)
+        echo "Splitting by chromosome (8 parallel jobs, filtering >= 50kbp)..."
+        samtools idxstats "$LOCAL_BAM" | awk '$1!="*" && $2>=50000{{print $1}}' | \
+          parallel -j 8 "samtools view -@ 4 -b $LOCAL_BAM {{}} -o $LOCAL_OUTDIR/{{}}.bam && samtools index -@ 4 $LOCAL_OUTDIR/{{}}.bam"
+        
+        # Copy results back to output directory
+        echo "Copying split BAMs to output directory..."
+        mkdir -p {params.outdir}
+        cp "$LOCAL_OUTDIR"/*.bam {params.outdir}/
+        cp "$LOCAL_OUTDIR"/*.bai {params.outdir}/
+        
+        # Create done marker
+        touch {output.done}
+        
+        # Cleanup
+        rm -rf "$LOCAL_TMP"
+        
+        echo "Chromosome splitting complete: {params.outdir}"
+        """
+
+
+
+## Keep the old rule commented out for reference
+#rule mpileup_bam:
+#    """
+#    Run samtools mpileup on a single BAM file.
+#    Output gzipped pileup text.
+#    Uses local tmpdir for I/O efficiency.
+#    """
+#    input:
+#        bam    = WORKDIR + "/merged_all.bam",
+#        bai    = WORKDIR + "/merged_all.bam.bai",
+#        ref    = REF
+#    output:
+#        pileup = WORKDIR + "/merged_all.pileup.gz"
+#    threads: 1
+#    resources:
+#        mem_mb = estimate_mem_mb_for_bam,
+#        runtime = estimate_runtime_for_bam
+#    shell:
+#        """
+#        TMPDIR=${{TMPDIR:-/tmp}}
+#        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_mpileup_XXXXXX")
+#        
+#        echo "Running mpileup on {params.bam_id}"
+#        
+#        # Copy BAM to local tmpdir
+#        LOCAL_BAM="$LOCAL_TMP/input.bam"
+#        cp {input.bam} "$LOCAL_BAM"
+#
+#        # Copy or create index
+#        if [ -f {input.bam}.bai ]; then
+#            cp {input.bam}.bai "$LOCAL_BAM.bai"
+#        else
+#            samtools index "$LOCAL_BAM"
+#        fi
+#        
+#        # Run mpileup and gzip to tmpdir
+#        LOCAL_OUT="$LOCAL_TMP/output.pileup.gz"
+#        samtools mpileup -B -Q 0 -q 0 -A -R -f {params.ref} "$LOCAL_BAM" | gzip > "$LOCAL_OUT"
+#        
+#        # Copy result back
+#        mkdir -p $(dirname {output.pileup})
+#        cp "$LOCAL_OUT" {output.pileup}
+#        
+#        # Cleanup
+#        rm -rf "$LOCAL_TMP"
+#        
+#        echo "Completed mpileup: {params.bam_id}"
+#        """
+
