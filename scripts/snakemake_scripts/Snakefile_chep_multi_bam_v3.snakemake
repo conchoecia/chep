@@ -122,12 +122,13 @@ os.makedirs(WORKDIR + "/batch_bams", exist_ok=True)
 # Wildcard constraints
 wildcard_constraints:
     batch_id = r"batch_\d+",
-    chrom = "[A-Za-z0-9_.\-]+"
+    chrom = r"[A-Za-z0-9_.\-]+"
 
-def get_chrom_bams(wildcards):
+def get_chrom_pileups(wildcards):
     """
-    Get list of chromosome BAM files created by split_bam_by_chromosome checkpoint.
-    This allows Snakemake to dynamically determine which chromosomes were created.
+    Aggregation function to get list of chromosome pileup files.
+    This is called after split_bam_by_chromosome checkpoint completes,
+    allowing Snakemake to dynamically determine which chromosomes were created.
     """
     checkpoint_output = checkpoints.split_bam_by_chromosome.get(**wildcards).output.done
     outdir = WORKDIR + "/split_by_chrom"
@@ -138,12 +139,13 @@ def get_chrom_bams(wildcards):
     
     # Extract chromosome names from filenames
     chroms = [os.path.basename(f).replace(".bam", "") for f in bam_files]
-    return chroms
+    
+    # Return list of pileup files to generate
+    return expand(WORKDIR + "/pileups/{chrom}.pileup.gz", chrom=chroms)
 
 rule all:
     input:
-        expand(WORKDIR + "/pileups/{chrom}.pileup.gz",
-                chrom=get_chrom_bams({})),
+        get_chrom_pileups
 
 rule merge_batch_bams:
     """
