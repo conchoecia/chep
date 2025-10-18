@@ -130,18 +130,12 @@ def get_chrom_pileups(wildcards):
     This is called after split_bam_by_chromosome checkpoint completes,
     allowing Snakemake to dynamically determine which chromosomes were created.
     """
-    checkpoint_output = checkpoints.split_bam_by_chromosome.get(**wildcards).output.done
+    checkpoint_output = checkpoints.split_bam_by_chromosome.get(**wildcards).output[0]
     outdir = WORKDIR + "/split_by_chrom"
-    
-    # Get all .bam files in the split directory
-    import glob
-    bam_files = glob.glob(outdir + "/*.bam")
-    
-    # Extract chromosome names from filenames
-    chroms = [os.path.basename(f).replace(".bam", "") for f in bam_files]
-    
+
     # Return list of pileup files to generate
-    return expand(WORKDIR + "/pileups/{chrom}.pileup.gz", chrom=chroms)
+    return expand(WORKDIR + "/pileups/{chrom}.pileup.gz",
+                  chrom=glob_wildcards(os.path.join(outdir, "{chrom}.bam")).chrom)
 
 rule all:
     input:
@@ -328,9 +322,8 @@ checkpoint split_bam_by_chromosome:
         bam = WORKDIR + "/merged_all.bam",
         bai = WORKDIR + "/merged_all.bam.bai"
     output:
-        done = WORKDIR + "/split_by_chrom/split.done"
-    params:
-        outdir = WORKDIR + "/split_by_chrom"
+        outdir = directory(WORKDIR + "/split_by_chrom"),
+        done   = WORKDIR + "/split_by_chrom/split.done"
     threads: 20
     retries: 2
     resources:
@@ -362,19 +355,18 @@ checkpoint split_bam_by_chromosome:
         
         # Copy results back to output directory
         echo "Copying split BAMs to output directory..."
-        mkdir -p {params.outdir}
-        cp "$LOCAL_OUTDIR"/*.bam {params.outdir}/
-        cp "$LOCAL_OUTDIR"/*.bai {params.outdir}/
-        
+        mkdir -p {output.outdir}
+        cp "$LOCAL_OUTDIR"/*.bam {output.outdir}/
+        cp "$LOCAL_OUTDIR"/*.bai {output.outdir}/
+
         # Create done marker
         touch {output.done}
         
         # Cleanup
         rm -rf "$LOCAL_TMP"
         
-        echo "Chromosome splitting complete: {params.outdir}"
+        echo "Chromosome splitting complete: {output.outdir}"
         """
-
 
 rule mpileup_chrom:
     """
