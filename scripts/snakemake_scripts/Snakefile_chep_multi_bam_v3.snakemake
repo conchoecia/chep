@@ -90,17 +90,44 @@ def estimate_index_runtime(attempt=1):
     # Scale with retry attempts
     return safe_runtime * attempt
 
+def estimate_split_runtime(bam_path, attempt=1):
+    """
+    Estimate runtime for splitting BAM by chromosome based on file size.
+    
+    Empirical observation: 123GB BAM file failed at 4 hours (240 min) on first attempt,
+    succeeded on second attempt (480 min = 8 hours).
+    
+    Runtime scales with BAM file size.
+    Formula: (file_size_gb / 123) × 480 minutes × 1.3 safety margin
+    """
+    import os
+    
+    # Get file size in GB
+    file_size_bytes = os.path.getsize(bam_path)
+    file_size_gb = file_size_bytes / (1024**3)
+    
+    # Base runtime for 123GB is 480 minutes (8 hours)
+    base_runtime = (file_size_gb / 123.0) * 480
+    
+    # Add 30% safety margin
+    safe_runtime = int(base_runtime * 1.3)
+    
+    # Scale with retry attempts
+    return safe_runtime * attempt
+
 # Create work directories
 os.makedirs(WORKDIR, exist_ok=True)
 os.makedirs(WORKDIR + "/batch_bams", exist_ok=True)
 
 # Wildcard constraints
 wildcard_constraints:
-    batch_id = r"batch_\d+"
+    batch_id = r"batch_\d+",
+    chrom = "[A-Za-z0-9_.\-]+"
 
 rule all:
     input:
-        WORKDIR + "/split_by_chrom/split.done"
+        expand(WORKDIR + "/pileups/{chrom}.pileup.gz",
+                chrom=get_chrom_bams({})),
 
 rule merge_batch_bams:
     """
@@ -272,13 +299,12 @@ rule index_final_bam:
 checkpoint split_bam_by_chromosome:
     """
     Split the final merged BAM by chromosome.
-    Uses GNU parallel to split in parallel (8 jobs at a time).
+    Uses GNU parallel to split in parallel (4 jobs at a time).
     Only processes chromosomes >= 50kbp in length.
     Each chromosome gets its own BAM file and index.
     
-    Note: This uses parallel with 8 jobs, each running samtools with 4 threads,
-    so it needs 8 threads reserved from SLURM (8 parallel jobs × 1 thread each,
-    since samtools threading is internal to each parallel job).
+    Note: Runs 4 parallel jobs, each using samtools with 4 threads = 16 threads total.
+    With observed ~20-30% CPU utilization, we reserve 20 threads to be safe.
     """
     input:
         bam = WORKDIR + "/merged_all.bam",
@@ -287,11 +313,11 @@ checkpoint split_bam_by_chromosome:
         done = WORKDIR + "/split_by_chrom/split.done"
     params:
         outdir = WORKDIR + "/split_by_chrom"
-    threads: 8
+    threads: 20
     retries: 2
     resources:
         mem_mb = lambda wildcards, attempt: 8000 * attempt,
-        runtime = lambda wildcards, attempt: 240 * attempt  # 4 hours
+        runtime = lambda wildcards, attempt, input: estimate_split_runtime(input.bam, attempt)
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
@@ -311,9 +337,10 @@ checkpoint split_bam_by_chromosome:
         mkdir -p "$LOCAL_OUTDIR"
         
         # Split by chromosome using parallel (only chromosomes >= 50000 bp)
-        echo "Splitting by chromosome (8 parallel jobs, filtering >= 50kbp)..."
+        # Run 4 parallel jobs, each using 4 threads (16 threads total)
+        echo "Splitting by chromosome (4 parallel jobs, filtering >= 50kbp)..."
         samtools idxstats "$LOCAL_BAM" | awk '$1!="*" && $2>=50000{{print $1}}' | \
-          parallel -j 8 "samtools view -@ 4 -b $LOCAL_BAM {{}} -o $LOCAL_OUTDIR/{{}}.bam && samtools index -@ 4 $LOCAL_OUTDIR/{{}}.bam"
+          parallel -j 4 "samtools view -@ 4 -b $LOCAL_BAM {{}} -o $LOCAL_OUTDIR/{{}}.bam && samtools index -@ 4 $LOCAL_OUTDIR/{{}}.bam"
         
         # Copy results back to output directory
         echo "Copying split BAMs to output directory..."
@@ -328,6 +355,71 @@ checkpoint split_bam_by_chromosome:
         rm -rf "$LOCAL_TMP"
         
         echo "Chromosome splitting complete: {params.outdir}"
+        """
+
+def get_chrom_bams(wildcards):
+    """
+    Get list of chromosome BAM files created by split_bam_by_chromosome checkpoint.
+    This allows Snakemake to dynamically determine which chromosomes were created.
+    """
+    checkpoint_output = checkpoints.split_bam_by_chromosome.get(**wildcards).output.done
+    outdir = WORKDIR + "/split_by_chrom"
+    
+    # Get all .bam files in the split directory
+    import glob
+    bam_files = glob.glob(outdir + "/*.bam")
+    
+    # Extract chromosome names from filenames
+    chroms = [os.path.basename(f).replace(".bam", "") for f in bam_files]
+    return chroms
+
+rule mpileup_chrom:
+    """
+    Run samtools mpileup on a single chromosome BAM file.
+    Output gzipped pileup text.
+    Uses local tmpdir for I/O efficiency.
+    
+    Each chromosome is processed independently for parallelization.
+    """
+    input:
+        bam = WORKDIR + "/split_by_chrom/{chrom}.bam",
+        bai = WORKDIR + "/split_by_chrom/{chrom}.bam.bai",
+        ref = REF
+    output:
+        pileup = WORKDIR + "/pileups/{chrom}.pileup.gz"
+    threads: 1
+    retries: 2
+    resources:
+        mem_mb = lambda wildcards, attempt: 4000 * attempt,
+        runtime = lambda wildcards, attempt: 120 * attempt  # 2 hours base
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_mpileup_XXXXXX")
+
+        echo "Running mpileup on chromosome {wildcards.chrom}"
+        echo "Working directory: $LOCAL_TMP"
+
+        # Copy BAM and index to local tmpdir for fast I/O
+        LOCAL_BAM="$LOCAL_TMP/{wildcards.chrom}.bam"
+        echo "Copying BAM and index to tmpdir..."
+        cp {input.bam} "$LOCAL_BAM"
+        cp {input.bai} "${{LOCAL_BAM}}.bai"
+
+        # Run mpileup and pipe directly to gzip in tmpdir
+        LOCAL_OUT="$LOCAL_TMP/{wildcards.chrom}.pileup.gz"
+        echo "Generating pileup..."
+        samtools mpileup -B -Q 0 -q 0 -A -R -f {input.ref} "$LOCAL_BAM" | gzip > "$LOCAL_OUT"
+
+        # Copy gzipped result back to output directory
+        echo "Copying pileup to output directory..."
+        mkdir -p $(dirname {output.pileup})
+        cp "$LOCAL_OUT" {output.pileup}
+
+        # Cleanup
+        rm -rf "$LOCAL_TMP"
+
+        echo "Completed mpileup for chromosome {wildcards.chrom}"
         """
 
 
