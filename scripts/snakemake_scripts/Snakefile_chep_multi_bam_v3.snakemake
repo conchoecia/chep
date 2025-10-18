@@ -463,7 +463,7 @@ rule combine_pileups_and_process:
     retries: 2
     resources:
         mem_mb = lambda wildcards, attempt: 8000 * attempt,
-        runtime = lambda wildcards, attempt: 120 * attempt  # 2 hours base
+        runtime = lambda wildcards, attempt: 240 * attempt  # 4 hours base
     shell:
         """
         echo "Combining pileup files and processing with CHEP"
