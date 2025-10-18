@@ -15,14 +15,16 @@ import os
 import math
 from pathlib import Path
 
+# Get the directory containing this Snakefile
+SNAKEFILE_DIR = Path(workflow.basedir)
+
 # Get config parameters
 REF = config.get("ref", "reference.fa")
 BAM_LIST = config.get("bam_list", "bam_list.txt")
 OUTPUT = config.get("output", "merged_all.bam")
 WORKDIR = config.get("workdir", "chep_merge_work")
+CHEP_BIN = config.get("chep_bin", str(SNAKEFILE_DIR.parent.parent / "bin" ))
 
-# Get the directory containing this Snakefile
-SNAKEFILE_DIR = Path(workflow.basedir)
 
 # Read BAM file list
 with open(BAM_LIST) as f:
@@ -115,6 +117,36 @@ def estimate_split_runtime(bam_path, attempt=1):
     # Scale with retry attempts
     return safe_runtime * attempt
 
+def estimate_mpileup_runtime(bam_path, attempt=1):
+    """
+    Estimate runtime for mpileup based on BAM file size.
+    
+    Empirical observations:
+    - 6.7 GB BAM: >120 minutes (failed at 2 hours)
+    - 809 KB (0.0008 GB) BAM: ~1 minute
+    
+    Runtime scales with BAM file size.
+    Conservative estimate: ~20 minutes per GB with 50% safety margin
+    Minimum runtime: 5 minutes for very small BAMs
+    """
+    import os
+    
+    # Get file size in GB
+    file_size_bytes = os.path.getsize(bam_path)
+    file_size_gb = file_size_bytes / (1024**3)
+    
+    # Base: 20 minutes per GB (conservative estimate)
+    base_runtime = file_size_gb * 20
+    
+    # Add 50% safety margin
+    safe_runtime = int(base_runtime * 1.5)
+    
+    # Minimum 5 minutes for very small BAMs
+    safe_runtime = max(5, safe_runtime)
+    
+    # Scale with retry attempts
+    return safe_runtime * attempt
+
 # Create work directories
 os.makedirs(WORKDIR, exist_ok=True)
 os.makedirs(WORKDIR + "/batch_bams", exist_ok=True)
@@ -139,7 +171,7 @@ def get_chrom_pileups(wildcards):
 
 rule all:
     input:
-        get_chrom_pileups
+        WORKDIR + "/chep_output.txt"
 
 rule merge_batch_bams:
     """
@@ -386,7 +418,7 @@ rule mpileup_chrom:
     retries: 2
     resources:
         mem_mb = lambda wildcards, attempt: 4000 * attempt,
-        runtime = lambda wildcards, attempt: 120 * attempt  # 2 hours base
+        runtime = lambda wildcards, attempt, input: estimate_mpileup_runtime(input.bam, attempt)
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
@@ -415,6 +447,33 @@ rule mpileup_chrom:
         rm -rf "$LOCAL_TMP"
 
         echo "Completed mpileup for chromosome {wildcards.chrom}"
+        """
+
+rule combine_pileups_and_process:
+    """
+    Combine all chromosome pileups and process with CHEP pileup_to_array.
+    Concatenates all gzipped pileup files and pipes through CHEP to generate
+    the final heterozygosity matrix output.
+    """
+    input:
+        pileups = get_chrom_pileups
+    output:
+        matrix = WORKDIR + "/chep_output.txt"
+    threads: 1
+    retries: 2
+    resources:
+        mem_mb = lambda wildcards, attempt: 8000 * attempt,
+        runtime = lambda wildcards, attempt: 120 * attempt  # 2 hours base
+    shell:
+        """
+        echo "Combining pileup files and processing with CHEP"
+        echo "Input pileups: {input.pileups}"
+        echo "CHEP binary: {CHEP_BIN}/chep_pileup_to_array"
+        
+        # Concatenate all gzipped pileups and pipe to CHEP
+        zcat {input.pileups} | {CHEP_BIN}/chep_pileup_to_array > {output.matrix}
+
+        echo "CHEP processing complete: {output.matrix}"
         """
 
 
