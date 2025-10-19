@@ -162,7 +162,59 @@ def auto_detect_xrange(fname):
     
     return minX, maxX, output_maxX
 
-def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False):
+def detect_coverage_mode(fname):
+    """
+    Detect the mode of genome coverage by finding the peak in the 45-55% heterozygous band.
+    
+    Returns: (mode_depth, estimated_het) tuple
+        mode_depth: The most common read depth in the heterozygous band
+        estimated_het: The estimated heterozygosity percentage at that depth
+    """
+    # Read the data
+    df = pd.read_csv(fname, header=None, sep=r'\s+',
+                     names=["depth","ref","count"])
+    
+    # Filter to heterozygous sites (45-55% ref alleles)
+    df_het = df[(df["ref"] / df["depth"] >= 0.45) & (df["ref"] / df["depth"] <= 0.55)]
+    
+    if len(df_het) == 0:
+        print("Warning: No heterozygous sites found for mode detection")
+        return None, None
+    
+    # Weight each depth by its count
+    weighted_depths = []
+    for idx, row in df_het.iterrows():
+        weighted_depths.extend([row["depth"]] * int(row["count"]))
+    
+    if len(weighted_depths) == 0:
+        return None, None
+    
+    # Find the mode using histogram
+    weighted_depths = np.array(weighted_depths)
+    hist, bin_edges = np.histogram(weighted_depths, bins=min(100, len(np.unique(weighted_depths))))
+    peak_idx = np.argmax(hist)
+    mode_depth = int((bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2)
+    
+    # Calculate heterozygosity at this depth
+    # Get all sites at this depth
+    df_at_mode = df[df["depth"] == mode_depth]
+    
+    # Count sites with different allele frequencies
+    total_sites = df_at_mode["count"].sum()
+    if total_sites == 0:
+        estimated_het = 0
+    else:
+        # Heterozygous sites are those with 25-75% ref (roughly)
+        het_sites = df_at_mode[(df_at_mode["ref"] / df_at_mode["depth"] >= 0.25) & 
+                                (df_at_mode["ref"] / df_at_mode["depth"] <= 0.75)]["count"].sum()
+        estimated_het = (het_sites / total_sites) * 100
+    
+    print(f"Detected coverage mode: {mode_depth}x")
+    print(f"  Estimated heterozygosity at mode: {estimated_het:.2f}%")
+    
+    return mode_depth, estimated_het
+
+def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False, mode_depth=None):
     maxval = len(scale)-1
     if dark:
         plt.style.use('dark_background')
@@ -188,6 +240,10 @@ def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False):
     panel1.set_xlabel("read depth")
     panel1.set_ylabel("# of reference bases")
     panel1.tick_params(axis='both', which='both', labelsize=6)
+    
+    # Add vertical line for coverage mode if provided
+    if mode_depth is not None:
+        panel1.axvline(mode_depth, color='blue', alpha=0.5, linewidth=1)
 
     # now make the color label
     #xpos, ypos, width, height
@@ -225,7 +281,7 @@ def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False):
         plt.savefig("{}_simple_het_plot.png".format(outprefix), dpi=300)
 
 def figure_with_marginal_histogram(fname, outprefix, xmin, xmax,
-                                   scale, dark = False):
+                                   scale, dark = False, mode_depth=None):
     maxval = len(scale)-1
     if dark:
         plt.style.use('dark_background')
@@ -251,6 +307,10 @@ def figure_with_marginal_histogram(fname, outprefix, xmin, xmax,
     panel1.set_xlabel("read depth")
     panel1.set_ylabel("# of reference bases")
     panel1.tick_params(axis='both', which='both', labelsize=6)
+    
+    # Add vertical line for coverage mode if provided
+    if mode_depth is not None:
+        panel1.axvline(mode_depth, color='blue', alpha=0.5, linewidth=1)
 
     df.rename(columns={0: "depth", 1: "ref", 2: "count"}, inplace=True)
     df2 = df.groupby("depth")["count"].sum()
@@ -269,6 +329,10 @@ def figure_with_marginal_histogram(fname, outprefix, xmin, xmax,
         thismfc='white'
     panel2.plot(df2.index.values, df2, mfc =thismfc, mew=0,
                 marker='o', linewidth=0, markersize=1)
+    
+    # Add vertical line for coverage mode if provided
+    if mode_depth is not None:
+        panel2.axvline(mode_depth, color='blue', alpha=0.5, linewidth=1)
 
     if dark:
         plt.savefig("{}_marginal_het_plot_dark.pdf".format(outprefix))
@@ -277,7 +341,8 @@ def figure_with_marginal_histogram(fname, outprefix, xmin, xmax,
         plt.savefig("{}_marginal_het_plot.pdf".format(outprefix))
         plt.savefig("{}_marginal_het_plot.png".format(outprefix), dpi=300)
 
-def fig_mhist_hetero(fname, outprefix, xmin, xmax, output_maxX, scale, gsize, dark=False):
+def fig_mhist_hetero(fname, outprefix, xmin, xmax, output_maxX, scale, gsize, dark=False, 
+                     mode_depth=None, estimated_het=None):
     """
     Generate heterozygosity plot with marginal histograms.
     
@@ -315,6 +380,10 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, output_maxX, scale, gsize, da
     panel1.set_xlabel("read depth")
     panel1.set_ylabel("# of reference bases")
     panel1.tick_params(axis='both', which='both', labelsize=6)
+    
+    # Add vertical line for coverage mode if provided
+    if mode_depth is not None:
+        panel1.axvline(mode_depth, color='blue', alpha=0.5, linewidth=1)
 
     # now plot the depth coverage histogram
     df.rename(columns={0: "depth", 1: "ref", 2: "count"}, inplace=True)
@@ -334,6 +403,18 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, output_maxX, scale, gsize, da
     panel2.plot(df2.index.values, df2, mfc =thismfc, mew=0,
                 marker='o',
                 linewidth=0, markersize=1)
+    
+    # Add vertical line for coverage mode if provided
+    if mode_depth is not None:
+        panel2.axvline(mode_depth, color='blue', alpha=0.5, linewidth=1)
+    
+    # Add text annotation for mode and estimated heterozygosity
+    if mode_depth is not None and estimated_het is not None:
+        # Position text in upper portion of panel2
+        y_pos = panel2.get_ylim()[1] * 0.85  # 85% up from bottom
+        panel2.text(mode_depth + (xmax - xmin) * 0.02, y_pos, 
+                   f'Mode: {mode_depth}x, Het: {estimated_het:.2f}%',
+                   color='blue', fontsize=7, va='top')
 
     #make the line dividing the 1x from het sites
     xs = [x for x in range(xmin, int(xmax*1.1))]
@@ -408,6 +489,10 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, output_maxX, scale, gsize, da
     panel3.plot(xs, ys, mfc =thismfc, mew=0,
                 marker='o',
                 linewidth=0, markersize=1)
+    
+    # Add vertical line for coverage mode if provided
+    if mode_depth is not None:
+        panel3.axvline(mode_depth, color='blue', alpha=0.5, linewidth=1)
 
     cols = ["depth", "totdepth", "pergenom", "full_cov",
             "half_cov", "err_cov", "het"]
@@ -488,16 +573,20 @@ def main(args):
     print(f"Using x-axis range for plotting: {args['minX']} to {args['maxX']}")
     print(f"Stats will be output up to: {output_maxX}")
     
+    # Detect coverage mode and estimated heterozygosity
+    print("\nDetecting coverage mode...")
+    mode_depth, estimated_het = detect_coverage_mode(args["filename"])
+    
     #print("genome size: ", genome_size)
     scale = determine_color_scheme(args["filename"], args["minX"], args["maxX"], args["dark"])
     plot_simple_figure(args["filename"], args["outprefix"], args["minX"],
-                       args["maxX"], scale, args["dark"])
+                       args["maxX"], scale, args["dark"], mode_depth)
     figure_with_marginal_histogram(args["filename"], args["outprefix"],
                                    args["minX"], args["maxX"],
-                                   scale, args["dark"])
+                                   scale, args["dark"], mode_depth)
     fig_mhist_hetero(args["filename"], args["outprefix"],
                      args["minX"], args["maxX"], output_maxX,
-                     scale, genome_size, args["dark"])
+                     scale, genome_size, args["dark"], mode_depth, estimated_het)
 
 if __name__ == "__main__":
     args = argparser()
