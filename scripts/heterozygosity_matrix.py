@@ -3,7 +3,31 @@
 This script makes several plots that are used to in calculating the heterozygosity of an animal.
 
 To acquire the input data for this script, start with a bam file and the reference fasta file.
-samtools mpileup -f assembly.fasta shot_to_assem.sorted.bam | \
+  samtools mpileup -f assembly.fasta shot_to_assem.sorted.bam | \\
+    chep_pileup_to_array > output.txt
+
+Usage:
+  # Auto-detect x-axis range based on heterozygosity distribution
+  heterozygosity_matrix.py -f data.txt -g genome.fa -o output_prefix
+
+  # Manually specify x-axis range
+  heterozygosity_matrix.py -f data.txt -g genome.fa -o output_prefix -x 20 -X 500
+
+  # Dark background theme
+  heterozygosity_matrix.py -f data.txt -g genome.fa -o output_prefix -d
+
+Arguments:
+  -f, --filename: Input file with read depth histogram (3 columns: depth, ref, count)
+  -g, --genome: Reference genome FASTA file
+  -o, --outprefix: Output file prefix
+  -x, --minX: Minimum X value to plot (optional, auto-detected if not provided)
+  -X, --maxX: Maximum X value to plot (optional, auto-detected if not provided)
+  -d, --dark: Use dark background for plots
+
+Output:
+  - *_marginal_het_het_plot.pdf: Main heterozygosity plot
+  - *_het_by_position.tsv: Detailed heterozygosity data by read depth
+  - Additional diagnostic plots
 """
 import argparse
 import pandas as pd
@@ -83,7 +107,7 @@ def auto_detect_xrange(fname):
     Auto-detect optimal x-axis range based on the distribution of half_cov values.
     
     Strategy: Find the peak of the half_cov distribution (most heterozygous sites),
-    then set min/max to be approximately 3 standard deviations from the peak.
+    then set min/max to be approximately 2 standard deviations from the peak.
     
     Returns: (minX, maxX) tuple
     """
@@ -107,7 +131,10 @@ def auto_detect_xrange(fname):
         # Fallback: not enough het sites, use simple heuristics
         print("Warning: Not enough heterozygous sites found for auto-detection")
         all_depths = df["depth"].values
-        return int(np.percentile(all_depths, 5)), int(np.percentile(all_depths, 95))
+        minX = int(np.percentile(all_depths, 5))
+        maxX = int(np.percentile(all_depths, 95))
+        output_maxX = int(np.percentile(all_depths, 99))
+        return minX, maxX, output_maxX
     
     # Convert to numpy array for statistics
     weighted_depths = np.array(weighted_depths)
@@ -121,15 +148,19 @@ def auto_detect_xrange(fname):
     mean_depth = np.mean(weighted_depths)
     std_depth = np.std(weighted_depths)
     
-    # Set range to ~3 standard deviations from the peak
+    # Set plot range to ~2 standard deviations from the peak
     # Use peak instead of mean to be more robust to outliers
-    minX = max(1, int(peak_depth - 3 * std_depth))
-    maxX = int(peak_depth + 3 * std_depth)
+    minX = max(1, int(peak_depth - 2 * std_depth))
+    maxX = int(peak_depth + 2 * std_depth)
     
-    print(f"Auto-detected x-axis range: {minX} to {maxX}")
+    # Set output range to ~4 standard deviations for comprehensive stats
+    output_maxX = int(peak_depth + 4 * std_depth)
+    
+    print(f"Auto-detected x-axis range for plotting: {minX} to {maxX}")
+    print(f"  Stats will be output up to: {output_maxX} (4 SD)")
     print(f"  Peak depth: {peak_depth:.1f}, Mean: {mean_depth:.1f}, Std: {std_depth:.1f}")
     
-    return minX, maxX
+    return minX, maxX, output_maxX
 
 def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False):
     maxval = len(scale)-1
@@ -246,7 +277,13 @@ def figure_with_marginal_histogram(fname, outprefix, xmin, xmax,
         plt.savefig("{}_marginal_het_plot.pdf".format(outprefix))
         plt.savefig("{}_marginal_het_plot.png".format(outprefix), dpi=300)
 
-def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
+def fig_mhist_hetero(fname, outprefix, xmin, xmax, output_maxX, scale, gsize, dark=False):
+    """
+    Generate heterozygosity plot with marginal histograms.
+    
+    xmin, xmax: Range for plotting
+    output_maxX: Maximum depth for stats output (typically larger than xmax)
+    """
     maxval = len(scale)-1
     if dark:
         plt.style.use('dark_background')
@@ -314,7 +351,11 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
     het_dict = {}
     # now we calculate heterozygosity
     df2.to_csv("{}_depth_num_bases.tsv".format(outprefix), sep = '\t', index=True)
-    for i in range(xmin, xmax +1):
+    
+    # Calculate het stats starting from depth 1, up to output_maxX (typically 4 SD from peak)
+    # This gives comprehensive stats even though we only plot 2 SD
+    max_depth = max(output_maxX + 1, df2.index.max() if len(df2.index) > 0 else output_maxX + 1)
+    for i in range(1, max_depth):
         if i in df2.index:
             onex = int(df.query("depth == {} and ref >= {}".format(i, i*0.75))["count"].sum())
             half = int(df.query("depth == {} and ref < {} and ref >= {}".format(
@@ -328,7 +369,9 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
                            "totdepth": df2.loc[i],
                            "pergenom": (df2.loc[i]/gsize)*100,
                            "het": (half/(onex+half))*100}
-    for i in range(xmin, xmax +1):
+    
+    # Calculate flanking statistics for all depths (starting from 1)
+    for i in range(1, max_depth):
         if i in het_dict:
             for j in [5,10]:
                 full_cov = 0
@@ -375,6 +418,8 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
 
     hdf = pd.DataFrame.from_dict(het_dict, orient="index",
             columns=cols)
+    # Sort by depth for clean output
+    hdf = hdf.sort_values('depth')
     hdf.to_csv("{}_het_by_position.tsv".format(outprefix),
                sep = '\t', index=False)
 
@@ -426,15 +471,22 @@ def main(args):
     genome_size = get_genome_size(args["genome"])
     
     # Auto-detect x-axis range if not provided
+    output_maxX = None  # Will be set if auto-detection is used
     if args["minX"] is None or args["maxX"] is None:
         print("Auto-detecting x-axis range...")
-        auto_minX, auto_maxX = auto_detect_xrange(args["filename"])
+        auto_minX, auto_maxX, auto_output_maxX = auto_detect_xrange(args["filename"])
         if args["minX"] is None:
             args["minX"] = auto_minX
         if args["maxX"] is None:
             args["maxX"] = auto_maxX
+        output_maxX = auto_output_maxX
     
-    print(f"Using x-axis range: {args['minX']} to {args['maxX']}")
+    # If user specified both ranges manually, use maxX for output too
+    if output_maxX is None:
+        output_maxX = args["maxX"]
+    
+    print(f"Using x-axis range for plotting: {args['minX']} to {args['maxX']}")
+    print(f"Stats will be output up to: {output_maxX}")
     
     #print("genome size: ", genome_size)
     scale = determine_color_scheme(args["filename"], args["minX"], args["maxX"], args["dark"])
@@ -444,7 +496,7 @@ def main(args):
                                    args["minX"], args["maxX"],
                                    scale, args["dark"])
     fig_mhist_hetero(args["filename"], args["outprefix"],
-                     args["minX"], args["maxX"],
+                     args["minX"], args["maxX"], output_maxX,
                      scale, genome_size, args["dark"])
 
 if __name__ == "__main__":
