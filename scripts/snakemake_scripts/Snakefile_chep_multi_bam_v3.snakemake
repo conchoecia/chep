@@ -210,7 +210,8 @@ def get_chrom_outputs(wildcards):
 
 rule all:
     input:
-        WORKDIR + "/chep_combined_matrix.txt"
+        WORKDIR + "/chep_combined_matrix.txt",
+        WORKDIR + "/plots/plots_marginal_het_het_plot.pdf"
 
 rule merge_batch_bams:
     """
@@ -604,6 +605,43 @@ rule sum_chep_matrices:
                 f.write(f"{row}\t{col}\t{count}\n")
         
         print("Matrix summation complete")
+
+rule plot_heterozygosity:
+    """
+    Generate heterozygosity plots from the combined CHEP matrix.
+    Creates all output plots in the plots subdirectory.
+    """
+    input:
+        matrix = WORKDIR + "/chep_combined_matrix.txt",
+        genome = REF
+    output:
+        depth_tsv    = WORKDIR + "/plots/plots_depth_num_bases.tsv",
+        het_tsv      = WORKDIR + "/plots/plots_het_by_position.tsv",
+        main_pdf     = WORKDIR + "/plots/plots_marginal_het_het_plot.pdf",
+        main_png     = WORKDIR + "/plots/plots_marginal_het_het_plot.png",
+        marginal_pdf = WORKDIR + "/plots/plots_marginal_het_plot.pdf",
+        marginal_png = WORKDIR + "/plots/plots_marginal_het_plot.png",
+        simple_pdf   = WORKDIR + "/plots/plots_simple_het_plot.pdf",
+        simple_png   = WORKDIR + "/plots/plots_simple_het_plot.png"
+    params:
+        outprefix = WORKDIR + "/plots/plots"
+    threads: 1
+    resources:
+        mem_mb = 8000,
+        runtime = 10
+    shell:
+        """
+        # Create plots directory
+        mkdir -p {params.outprefix:q}/../
+        
+        # Run plotting script with auto-detection of x-axis range
+        {CHEP_BIN}/chep_plot \\
+            -f {input.matrix} \\
+            -g {input.genome} \\
+            -o {params.outprefix}
+        
+        echo "Plots generated in: $(dirname {params.outprefix})"
+        """
 
 ## Keep the old rule commented out for reference
 #rule mpileup_bam:
