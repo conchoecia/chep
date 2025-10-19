@@ -152,8 +152,8 @@ def estimate_chep_runtime(pileup_path, attempt=1):
     Estimate runtime for CHEP processing based on pileup file size.
     
     Runtime scales with pileup file size.
-    Conservative estimate: ~1 minute per 100 MB with 50% safety margin
-    Minimum runtime: 5 minutes for very small pileups
+    Conservative estimate: ~3 minutes per 100 MB with 50% safety margin
+    Minimum runtime: 10 minutes for very small pileups
     """
     import os
     
@@ -161,14 +161,14 @@ def estimate_chep_runtime(pileup_path, attempt=1):
     file_size_bytes = os.path.getsize(pileup_path)
     file_size_mb = file_size_bytes / (1024**2)
     
-    # Base: 1 minute per 100 MB
-    base_runtime = file_size_mb / 100.0
+    # Base: 3 minutes per 100 MB (3x increase from original)
+    base_runtime = (file_size_mb / 100.0) * 3
     
     # Add 50% safety margin
     safe_runtime = int(base_runtime * 1.5)
     
-    # Minimum 5 minutes for very small pileups
-    safe_runtime = max(5, safe_runtime)
+    # Minimum 10 minutes for very small pileups
+    safe_runtime = max(10, safe_runtime)
     
     # Scale with retry attempts
     return safe_runtime * attempt
