@@ -173,6 +173,35 @@ def estimate_chep_runtime(pileup_path, attempt=1):
     # Scale with retry attempts
     return safe_runtime * attempt
 
+def estimate_depth_stats_runtime(pileup_path, attempt=1):
+    """
+    Estimate runtime for windowed depth stats calculation based on pileup.gz size.
+    
+    Empirical: 1.4GB file failed at 20 minutes, 2.9GB files completed in <20 minutes
+    This suggests processing speed varies significantly, possibly due to compression
+    ratio, line count, or other factors.
+    
+    Conservative estimate: 15 minutes per GB with 2x safety margin
+    Minimum runtime: 30 minutes to handle edge cases
+    """
+    import os
+    
+    # Get file size in GB
+    file_size_bytes = os.path.getsize(pileup_path)
+    file_size_gb = file_size_bytes / (1024**3)
+    
+    # Base: 15 minutes per GB
+    base_runtime = file_size_gb * 15
+    
+    # Add 2x safety margin (processing time can vary a lot)
+    safe_runtime = int(base_runtime * 2)
+    
+    # Minimum 30 minutes for edge cases
+    safe_runtime = max(30, safe_runtime)
+    
+    # Scale with retry attempts
+    return safe_runtime * attempt
+
 # Create work directories
 os.makedirs(WORKDIR, exist_ok=True)
 os.makedirs(WORKDIR + "/batch_bams", exist_ok=True)
@@ -662,6 +691,7 @@ rule windowed_depth_stats:
     """
     Calculate depth statistics in 50kbp windows from a pileup file.
     Output: scaf_name, start, stop, depth_mode, depth_mean, num_positions_with_reads
+    Runtime scales with pileup.gz file size (15 min/GB with 2x safety margin, min 30 min)
     """
     input:
         pileup = WORKDIR + "/pileups/{chrom}.pileup.gz"
@@ -672,7 +702,7 @@ rule windowed_depth_stats:
     threads: 1
     resources:
         mem_mb = 2000,
-        runtime = 20
+        runtime = lambda wildcards, input, attempt: estimate_depth_stats_runtime(input.pileup, attempt)
     run:
         import gzip
         from collections import defaultdict
