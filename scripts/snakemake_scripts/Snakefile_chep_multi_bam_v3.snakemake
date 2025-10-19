@@ -208,10 +208,25 @@ def get_chrom_outputs(wildcards):
     return expand(WORKDIR + "/chep_outputs/{chrom}.chep.txt",
                   chrom=glob_wildcards(os.path.join(outdir, "{chrom}.bam")).chrom)
 
+def get_depth_stats(wildcards):
+    """
+    Aggregation function to get list of depth stats files (one per chromosome).
+    This is called after split_bam_by_chromosome checkpoint completes,
+    allowing Snakemake to dynamically determine which chromosomes were created.
+    """
+    checkpoint_output = checkpoints.split_bam_by_chromosome.get(**wildcards).output[0]
+    outdir = WORKDIR + "/split_by_chrom"
+
+    # Return list of depth stats files to generate
+    return expand(WORKDIR + "/depth_stats/{chrom}_depth_stats.tsv",
+                  chrom=glob_wildcards(os.path.join(outdir, "{chrom}.bam")).chrom)
+
 rule all:
     input:
         WORKDIR + "/chep_combined_matrix.txt",
-        WORKDIR + "/plots/plots_marginal_het_het_plot.pdf"
+        WORKDIR + "/plots/plots_marginal_het_het_plot.pdf",
+        get_depth_stats
+
 
 rule merge_batch_bams:
     """
@@ -642,6 +657,79 @@ rule plot_heterozygosity:
         
         echo "Plots generated in: $(dirname {params.outprefix})"
         """
+
+rule windowed_depth_stats:
+    """
+    Calculate depth statistics in 50kbp windows from a pileup file.
+    Output: scaf_name, start, stop, depth_mode, depth_mean, num_positions_with_reads
+    """
+    input:
+        pileup = WORKDIR + "/pileups/{chrom}.pileup.gz"
+    output:
+        stats = WORKDIR + "/depth_stats/{chrom}_depth_stats.tsv"
+    params:
+        window_size = 50000
+    threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 20
+    run:
+        import gzip
+        from collections import defaultdict
+        import statistics
+        
+        window_size = params.window_size
+        
+        # Dictionary to store depths per window: (chrom, window_start) -> [depths]
+        windows = defaultdict(list)
+        
+        print(f"Processing pileup: {input.pileup}")
+        
+        # Read pileup file
+        with gzip.open(input.pileup, 'rt') as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) < 4:
+                    continue
+                
+                chrom = parts[0]
+                pos = int(parts[1])
+                depth = int(parts[3])
+                
+                # Calculate which window this position belongs to
+                window_start = (pos // window_size) * window_size
+                
+                windows[(chrom, window_start)].append(depth)
+        
+        print(f"Found {len(windows)} windows with coverage")
+        
+        # Calculate statistics for each window and write output
+        with open(output.stats, 'w') as out:
+            # Write header
+            out.write("scaf_name\tstart\tstop\tdepth_mode\tdepth_mean\tnum_positions_with_reads\n")
+            
+            # Sort windows by chromosome and position
+            for (chrom, window_start) in sorted(windows.keys()):
+                depths = windows[(chrom, window_start)]
+                window_stop = window_start + window_size
+                
+                # Calculate statistics
+                mean_depth = statistics.mean(depths)
+                
+                # Calculate mode (most common depth value)
+                # Use a simple frequency count
+                depth_counts = defaultdict(int)
+                for d in depths:
+                    depth_counts[d] += 1
+                mode_depth = max(depth_counts.keys(), key=lambda k: depth_counts[k])
+                
+                num_positions = len(depths)
+                
+                # Write output
+                out.write(f"{chrom}\t{window_start}\t{window_stop}\t"
+                         f"{mode_depth}\t{mean_depth:.2f}\t{num_positions}\n")
+        
+        print(f"Depth statistics written to: {output.stats}")
 
 ## Keep the old rule commented out for reference
 #rule mpileup_bam:
