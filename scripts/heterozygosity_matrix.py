@@ -65,16 +65,71 @@ def argparser():
                         help="""The prefix of the output files.""")
     parser.add_argument('-x', '--minX',
                         type=int,
-                        help="""only plot the data starting at this X value""")
+                        default=None,
+                        help="""only plot the data starting at this X value (auto-detected if not provided)""")
     parser.add_argument('-X', '--maxX',
                         type = int,
-                        help = """only plot the window up to this X value""")
+                        default=None,
+                        help = """only plot the window up to this X value (auto-detected if not provided)""")
     parser.add_argument('-d', '--dark',
                         action='store_true',
                         help = "make the plot over a dark background")
     args = parser.parse_args()
     args = vars(args)
     return args
+
+def auto_detect_xrange(fname):
+    """
+    Auto-detect optimal x-axis range based on the distribution of half_cov values.
+    
+    Strategy: Find the peak of the half_cov distribution (most heterozygous sites),
+    then set min/max to be approximately 3 standard deviations from the peak.
+    
+    Returns: (minX, maxX) tuple
+    """
+    # Read the data
+    df = pd.read_csv(fname, header=None, sep=r'\s+',
+                     names=["depth","ref","count"])
+    
+    # Weight each depth value by its count to get the actual distribution
+    weighted_depths = []
+    for idx, row in df.iterrows():
+        depth = row["depth"]
+        ref = row["ref"]
+        count = row["count"]
+        
+        # Only consider heterozygous sites (roughly 45-55% ref alleles)
+        ref_fraction = ref / depth if depth > 0 else 0
+        if 0.45 <= ref_fraction <= 0.55:
+            weighted_depths.extend([depth] * int(count))
+    
+    if len(weighted_depths) < 10:
+        # Fallback: not enough het sites, use simple heuristics
+        print("Warning: Not enough heterozygous sites found for auto-detection")
+        all_depths = df["depth"].values
+        return int(np.percentile(all_depths, 5)), int(np.percentile(all_depths, 95))
+    
+    # Convert to numpy array for statistics
+    weighted_depths = np.array(weighted_depths)
+    
+    # Find the peak (mode) using histogram
+    hist, bin_edges = np.histogram(weighted_depths, bins=50)
+    peak_idx = np.argmax(hist)
+    peak_depth = (bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2
+    
+    # Calculate mean and std
+    mean_depth = np.mean(weighted_depths)
+    std_depth = np.std(weighted_depths)
+    
+    # Set range to ~3 standard deviations from the peak
+    # Use peak instead of mean to be more robust to outliers
+    minX = max(1, int(peak_depth - 3 * std_depth))
+    maxX = int(peak_depth + 3 * std_depth)
+    
+    print(f"Auto-detected x-axis range: {minX} to {maxX}")
+    print(f"  Peak depth: {peak_depth:.1f}, Mean: {mean_depth:.1f}, Std: {std_depth:.1f}")
+    
+    return minX, maxX
 
 def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False):
     maxval = len(scale)-1
@@ -369,6 +424,18 @@ def get_genome_size(genome_file):
 
 def main(args):
     genome_size = get_genome_size(args["genome"])
+    
+    # Auto-detect x-axis range if not provided
+    if args["minX"] is None or args["maxX"] is None:
+        print("Auto-detecting x-axis range...")
+        auto_minX, auto_maxX = auto_detect_xrange(args["filename"])
+        if args["minX"] is None:
+            args["minX"] = auto_minX
+        if args["maxX"] is None:
+            args["maxX"] = auto_maxX
+    
+    print(f"Using x-axis range: {args['minX']} to {args['maxX']}")
+    
     #print("genome size: ", genome_size)
     scale = determine_color_scheme(args["filename"], args["minX"], args["maxX"], args["dark"])
     plot_simple_figure(args["filename"], args["outprefix"], args["minX"],
