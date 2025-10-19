@@ -164,7 +164,10 @@ def auto_detect_xrange(fname):
 
 def detect_coverage_mode(fname):
     """
-    Detect the mode of genome coverage by finding the peak in the 45-55% heterozygous band.
+    Detect the mode of genome coverage by finding the peak density in the 45-55% heterozygous band.
+    
+    This looks at the 2D histogram and finds the depth with the highest total count
+    in the heterozygous region (around 50% ref alleles).
     
     Returns: (mode_depth, estimated_het) tuple
         mode_depth: The most common read depth in the heterozygous band
@@ -175,25 +178,27 @@ def detect_coverage_mode(fname):
                      names=["depth","ref","count"])
     
     # Filter to heterozygous sites (45-55% ref alleles)
-    df_het = df[(df["ref"] / df["depth"] >= 0.45) & (df["ref"] / df["depth"] <= 0.55)]
+    df_het = df[(df["ref"] / df["depth"] >= 0.45) & (df["ref"] / df["depth"] <= 0.55)].copy()
     
     if len(df_het) == 0:
         print("Warning: No heterozygous sites found for mode detection")
         return None, None
     
-    # Weight each depth by its count
-    weighted_depths = []
-    for idx, row in df_het.iterrows():
-        weighted_depths.extend([row["depth"]] * int(row["count"]))
+    # Group by depth and sum counts - this gives us the total number of het sites at each depth
+    depth_counts = df_het.groupby("depth")["count"].sum()
     
-    if len(weighted_depths) == 0:
+    if len(depth_counts) == 0:
         return None, None
     
-    # Find the mode using histogram
-    weighted_depths = np.array(weighted_depths)
-    hist, bin_edges = np.histogram(weighted_depths, bins=min(100, len(np.unique(weighted_depths))))
-    peak_idx = np.argmax(hist)
-    mode_depth = int((bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2)
+    # Find the depth with maximum count (the mode)
+    mode_depth = int(depth_counts.idxmax())
+    
+    # Optional: Apply smoothing to be more robust to noise
+    # Create a smoothed version by averaging nearby depths
+    if len(depth_counts) > 5:
+        # Use a rolling window to smooth the counts
+        smoothed = depth_counts.rolling(window=5, center=True, min_periods=1).mean()
+        mode_depth = int(smoothed.idxmax())
     
     # Calculate heterozygosity at this depth
     # Get all sites at this depth
