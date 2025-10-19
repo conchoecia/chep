@@ -210,7 +210,7 @@ def get_chrom_outputs(wildcards):
 
 rule all:
     input:
-        get_chrom_outputs
+        WORKDIR + "/chep_combined_matrix.txt"
 
 rule merge_batch_bams:
     """
@@ -534,7 +534,76 @@ rule process_pileup_with_chep:
         echo "CHEP processing complete for {wildcards.chrom}: {output.matrix}"
         """
 
-
+rule sum_chep_matrices:
+    """
+    Sum all chromosome CHEP matrices into a single combined matrix.
+    Each CHEP file contains a triangular matrix format where each line is:
+    row col count
+    
+    Missing cells with 0 counts have no lines in the file.
+    This rule sums the counts for matching (row, col) pairs across all chromosomes.
+    """
+    input:
+        matrices = get_chrom_outputs
+    output:
+        combined = WORKDIR + "/chep_combined_matrix.txt"
+    threads: 1
+    retries: 2
+    resources:
+        mem_mb = lambda wildcards, attempt: 16000 * attempt,
+        runtime = lambda wildcards, attempt: 60 * attempt
+    run:
+        from collections import defaultdict
+        import time
+        
+        total_matrices = len(input.matrices)
+        print(f"Summing {total_matrices} CHEP matrices")
+        print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Dictionary to store summed counts: (row, col) -> count
+        matrix_sum = defaultdict(int)
+        
+        # Read and sum all matrices
+        start_time = time.time()
+        import sys
+        
+        for idx, matrix_file in enumerate(input.matrices, 1):
+            # Read the file
+            with open(matrix_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    if len(parts) == 3:
+                        row = int(parts[0])
+                        col = int(parts[1])
+                        count = int(parts[2])
+                        matrix_sum[(row, col)] += count
+            
+            # Print progress for every file
+            elapsed = time.time() - start_time
+            rate = idx / elapsed if elapsed > 0 else 0
+            remaining = (total_matrices - idx) / rate if rate > 0 else 0
+            
+            # Use carriage return to overwrite line, newline every 10 files
+            end_char = '\n' if (idx % 10 == 0 or idx == total_matrices) else '\r'
+            
+            print(f"  Progress: {idx}/{total_matrices} ({100*idx/total_matrices:.1f}%) | "
+                  f"Elapsed: {elapsed:.1f}s | Rate: {rate:.2f} files/s | "
+                  f"ETA: {remaining:.1f}s | Pairs: {len(matrix_sum)}", 
+                  end=end_char, flush=True)
+        
+        print(f"  Total unique (row, col) pairs: {len(matrix_sum)}")
+        
+        # Write combined matrix
+        print(f"Writing combined matrix to: {output.combined}")
+        with open(output.combined, 'w') as f:
+            # Sort by row, then by col for consistent output
+            for (row, col), count in sorted(matrix_sum.items()):
+                f.write(f"{row}\t{col}\t{count}\n")
+        
+        print("Matrix summation complete")
 
 ## Keep the old rule commented out for reference
 #rule mpileup_bam:
