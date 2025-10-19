@@ -19,10 +19,15 @@ import sys
 
 # Set matplotlib style
 matplotlib.rcParams['font.family'] = 'sans-serif'
-matplotlib.rcParams['font.sans-serif'] = ['Helvetica']
+# Try Helvetica first, fall back to default sans-serif fonts
+matplotlib.rcParams['font.sans-serif'] = ['Helvetica', 'DejaVu Sans', 'Arial', 'sans-serif']
 matplotlib.rcParams['axes.facecolor'] = 'white'
 matplotlib.rcParams['axes.edgecolor'] = '.95'
 matplotlib.rcParams['grid.color'] = '.95'
+
+# Suppress font warnings
+import warnings
+warnings.filterwarnings('ignore', message='findfont: Generic family')
 
 # Preserve the vertical order of embedded images:
 matplotlib.rcParams['image.composite_image'] = False
@@ -76,7 +81,7 @@ def plot_simple_figure(fname, outprefix, xmin, xmax, scale, dark=False):
     if dark:
         plt.style.use('dark_background')
 
-    df = pd.read_csv(fname, header=None, delim_whitespace=True)
+    df = pd.read_csv(fname, header=None, sep=r'\s+')
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8,0.8])
 
@@ -139,7 +144,7 @@ def figure_with_marginal_histogram(fname, outprefix, xmin, xmax,
     if dark:
         plt.style.use('dark_background')
 
-    df = pd.read_csv(fname, header=None, delim_whitespace=True)
+    df = pd.read_csv(fname, header=None, sep=r'\s+')
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8,0.53])
     panel2=plt.axes([0.14,0.7,0.8,0.2])
@@ -195,7 +200,7 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
     #  - col 0 is the read coverage
     #  - col 1 is the number of reads in that position that had the reference base
     #  - col 2 is the number of sites with that read coverage with that many reads having the reference base
-    df = pd.read_csv(fname, header=None, delim_whitespace=True)
+    df = pd.read_csv(fname, header=None, sep=r'\s+')
     plt.figure(figsize=(4,4))
     panel1=plt.axes([0.14,0.12,0.8, 0.38])
     panel2=plt.axes([0.14,0.74 ,0.8,0.18])
@@ -235,7 +240,7 @@ def fig_mhist_hetero(fname, outprefix, xmin, xmax, scale, gsize, dark=False):
     if dark:
         thismfc='white'
     panel2.plot(df2.index.values, df2, mfc =thismfc, mew=0,
-                marker='o', linestyle='dashed',
+                marker='o',
                 linewidth=0, markersize=1)
 
     #make the line dividing the 1x from het sites
@@ -335,7 +340,7 @@ def determine_color_scheme(fname, xmin, xmax, dark=False):
     """
     dist = xmax-xmin
     dd=0.25*dist
-    df = pd.read_csv(args["filename"], header=None, delim_whitespace=True,
+    df = pd.read_csv(args["filename"], header=None, sep=r'\s+',
                      names=["depth","ref","count"])
     df2 = df.query("depth <= {} and depth >= {}".format(xmax-dd, xmin+dd))
     df3 = df2.loc[df2["ref"] < df2["depth"]*0.55]
