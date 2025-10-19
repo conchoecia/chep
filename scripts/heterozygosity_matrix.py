@@ -7,7 +7,6 @@ samtools mpileup -f assembly.fasta shot_to_assem.sorted.bam | \
 """
 import argparse
 import pandas as pd
-import seaborn as sns; sns.set()
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mplpatches
@@ -18,11 +17,12 @@ import numpy as np
 import os
 import sys
 
-# set seaborn stuff
-#sns.set(rc={'text.usetex' : True})
-sns.set_style("white", {'font.family': ['sans-serif'],
-                            'font.sans-serif': ['Helvetica'],
-                            'grid.color': '.95'})
+# Set matplotlib style
+matplotlib.rcParams['font.family'] = 'sans-serif'
+matplotlib.rcParams['font.sans-serif'] = ['Helvetica']
+matplotlib.rcParams['axes.facecolor'] = 'white'
+matplotlib.rcParams['axes.edgecolor'] = '.95'
+matplotlib.rcParams['grid.color'] = '.95'
 
 # Preserve the vertical order of embedded images:
 matplotlib.rcParams['image.composite_image'] = False
