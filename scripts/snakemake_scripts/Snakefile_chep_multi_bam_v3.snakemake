@@ -147,6 +147,32 @@ def estimate_mpileup_runtime(bam_path, attempt=1):
     # Scale with retry attempts
     return safe_runtime * attempt
 
+def estimate_chep_runtime(pileup_path, attempt=1):
+    """
+    Estimate runtime for CHEP processing based on pileup file size.
+    
+    Runtime scales with pileup file size.
+    Conservative estimate: ~1 minute per 100 MB with 50% safety margin
+    Minimum runtime: 5 minutes for very small pileups
+    """
+    import os
+    
+    # Get file size in MB
+    file_size_bytes = os.path.getsize(pileup_path)
+    file_size_mb = file_size_bytes / (1024**2)
+    
+    # Base: 1 minute per 100 MB
+    base_runtime = file_size_mb / 100.0
+    
+    # Add 50% safety margin
+    safe_runtime = int(base_runtime * 1.5)
+    
+    # Minimum 5 minutes for very small pileups
+    safe_runtime = max(5, safe_runtime)
+    
+    # Scale with retry attempts
+    return safe_runtime * attempt
+
 # Create work directories
 os.makedirs(WORKDIR, exist_ok=True)
 os.makedirs(WORKDIR + "/batch_bams", exist_ok=True)
@@ -169,9 +195,22 @@ def get_chrom_pileups(wildcards):
     return expand(WORKDIR + "/pileups/{chrom}.pileup.gz",
                   chrom=glob_wildcards(os.path.join(outdir, "{chrom}.bam")).chrom)
 
+def get_chrom_outputs(wildcards):
+    """
+    Aggregation function to get list of CHEP output files (one per chromosome).
+    This is called after split_bam_by_chromosome checkpoint completes,
+    allowing Snakemake to dynamically determine which chromosomes were created.
+    """
+    checkpoint_output = checkpoints.split_bam_by_chromosome.get(**wildcards).output[0]
+    outdir = WORKDIR + "/split_by_chrom"
+
+    # Return list of CHEP output files to generate
+    return expand(WORKDIR + "/chep_outputs/{chrom}.chep.txt",
+                  chrom=glob_wildcards(os.path.join(outdir, "{chrom}.bam")).chrom)
+
 rule all:
     input:
-        WORKDIR + "/chep_output.txt"
+        get_chrom_outputs
 
 rule merge_batch_bams:
     """
@@ -449,48 +488,40 @@ rule mpileup_chrom:
         echo "Completed mpileup for chromosome {wildcards.chrom}"
         """
 
-rule combine_pileups_and_process:
+rule process_pileup_with_chep:
     """
-    Combine all chromosome pileups and process with CHEP pileup_to_array.
-    Concatenates all gzipped pileup files and pipes through CHEP to generate
-    the final heterozygosity matrix output.
+    Process a single chromosome pileup with CHEP pileup_to_array.
+    Each chromosome is processed independently for parallelization.
     
     Uses local tmpdir to avoid slow I/O on network storage.
     """
     input:
-        pileups = get_chrom_pileups
+        pileup = WORKDIR + "/pileups/{chrom}.pileup.gz"
     output:
-        matrix = WORKDIR + "/chep_output.txt"
+        matrix = WORKDIR + "/chep_outputs/{chrom}.chep.txt"
     threads: 1
     retries: 2
     resources:
         mem_mb = lambda wildcards, attempt: 8000 * attempt,
-        runtime = lambda wildcards, attempt: 240 * attempt  # 4 hours base
+        runtime = lambda wildcards, attempt, input: estimate_chep_runtime(input.pileup, attempt)
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
-        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_combine_XXXXXX")
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_process_XXXXXX")
         
-        echo "Combining pileup files and processing with CHEP"
+        echo "Processing pileup for chromosome {wildcards.chrom} with CHEP"
         echo "Working directory: $LOCAL_TMP"
-        echo "Number of pileup files: $(echo {input.pileups} | wc -w)"
         
-        # Copy all pileup files to local tmpdir for fast I/O
-        echo "Copying pileup files to tmpdir..."
-        LOCAL_PILEUPS="$LOCAL_TMP/pileups"
-        mkdir -p "$LOCAL_PILEUPS"
+        # Copy pileup file to local tmpdir for fast I/O
+        echo "Copying pileup to tmpdir..."
+        LOCAL_PILEUP="$LOCAL_TMP/{wildcards.chrom}.pileup.gz"
+        cp {input.pileup} "$LOCAL_PILEUP"
         
-        counter=0
-        for pileup in {input.pileups}; do
-            counter=$((counter + 1))
-            cp "$pileup" "$LOCAL_PILEUPS/chrom_${{counter}}.pileup.gz"
-        done
+        echo "Running CHEP on {wildcards.chrom}..."
         
-        echo "All pileups copied. Running CHEP..."
-        
-        # Concatenate all local pileups and pipe to CHEP
-        LOCAL_OUT="$LOCAL_TMP/chep_output.txt"
-        zcat "$LOCAL_PILEUPS"/*.pileup.gz | {CHEP_BIN}/chep_pileup_to_array > "$LOCAL_OUT"
+        # Process with CHEP
+        LOCAL_OUT="$LOCAL_TMP/{wildcards.chrom}.chep.txt"
+        zcat "$LOCAL_PILEUP" | {CHEP_BIN}/chep_pileup_to_array > "$LOCAL_OUT"
         
         # Copy result back
         echo "Copying output to final location..."
@@ -500,7 +531,7 @@ rule combine_pileups_and_process:
         # Cleanup
         rm -rf "$LOCAL_TMP"
         
-        echo "CHEP processing complete: {output.matrix}"
+        echo "CHEP processing complete for {wildcards.chrom}: {output.matrix}"
         """
 
 
