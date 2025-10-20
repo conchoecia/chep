@@ -263,12 +263,25 @@ def get_variant_calls(wildcards):
     return expand(WORKDIR + "/variants/{chrom}.vcf.gz",
                   chrom=glob_wildcards(os.path.join(outdir, "{chrom}.bam")).chrom)
 
+def get_filtered_snps(wildcards):
+    """
+    Aggregation function to get list of filtered SNP VCF files (one per chromosome).
+    This is called after split_bam_by_chromosome checkpoint completes,
+    allowing Snakemake to dynamically determine which chromosomes were created.
+    """
+    checkpoint_output = checkpoints.split_bam_by_chromosome.get(**wildcards).output[0]
+    outdir = WORKDIR + "/split_by_chrom"
+
+    # Return list of filtered SNP VCF files to generate
+    return expand(WORKDIR + "/variants/{chrom}.snps.q20.vcf.gz",
+                  chrom=glob_wildcards(os.path.join(outdir, "{chrom}.bam")).chrom)
+
 rule all:
     input:
         WORKDIR + "/chep_combined_matrix.txt",
         WORKDIR + "/plots/plots_marginal_het_het_plot.pdf",
         get_depth_stats,
-        get_variant_calls
+        get_filtered_snps
 
 
 rule merge_batch_bams:
@@ -554,6 +567,9 @@ rule call_variants_chrom:
     
     Each chromosome is processed independently for parallelization.
     Outputs compressed VCF (BCF format) for efficiency.
+    
+    Note: bcftools mpileup is much faster than samtools mpileup, so we use
+    0.5× the samtools mpileup estimate (1/4 of the previous 2× estimate).
     """
     input:
         bam = WORKDIR + "/split_by_chrom/{chrom}.bam",
@@ -562,11 +578,11 @@ rule call_variants_chrom:
     output:
         vcf = WORKDIR + "/variants/{chrom}.vcf.gz",
         csi = WORKDIR + "/variants/{chrom}.vcf.gz.csi"
-    threads: 4
+    threads: 2
     retries: 2
     resources:
         mem_mb = lambda wildcards, attempt: 8000 * attempt,
-        runtime = lambda wildcards, attempt, input: estimate_mpileup_runtime(input.bam, attempt) * 2
+        runtime = lambda wildcards, attempt, input: int(estimate_mpileup_runtime(input.bam, attempt) * 2)
     shell:
         """
         TMPDIR=${{TMPDIR:-/tmp}}
@@ -601,6 +617,58 @@ rule call_variants_chrom:
         rm -rf "$LOCAL_TMP"
         
         echo "Completed variant calling for chromosome {wildcards.chrom}"
+        """
+
+rule filter_snps:
+    """
+    Filter variants to keep only high-quality SNPs (QUAL > 20).
+    Takes raw variant calls and outputs filtered SNP-only VCF.
+    Uses local tmpdir for fast I/O to avoid locking up network storage.
+    """
+    input:
+        vcf = WORKDIR + "/variants/{chrom}.vcf.gz",
+        csi = WORKDIR + "/variants/{chrom}.vcf.gz.csi"
+    output:
+        vcf = WORKDIR + "/variants/{chrom}.snps.q20.vcf.gz",
+        csi = WORKDIR + "/variants/{chrom}.snps.q20.vcf.gz.csi"
+    threads: 2
+    retries: 2
+    resources:
+        mem_mb = lambda wildcards, attempt: 2000 * attempt,
+        runtime = lambda wildcards, attempt: 10 * attempt
+    shell:
+        """
+        TMPDIR=${{TMPDIR:-/tmp}}
+        LOCAL_TMP=$(mktemp -d "$TMPDIR/chep_filter_snps_XXXXXX")
+        
+        echo "Filtering SNPs with QUAL > 20 for chromosome {wildcards.chrom}"
+        echo "Working directory: $LOCAL_TMP"
+        
+        # Copy input VCF and index to tmpdir
+        LOCAL_VCF="$LOCAL_TMP/{wildcards.chrom}.vcf.gz"
+        echo "Copying VCF and index to tmpdir..."
+        cp {input.vcf} "$LOCAL_VCF"
+        cp {input.csi} "${{LOCAL_VCF}}.csi"
+        
+        # Filter to SNPs only with QUAL > 20 in tmpdir
+        LOCAL_OUT="$LOCAL_TMP/{wildcards.chrom}.snps.q20.vcf.gz"
+        echo "Filtering variants..."
+        bcftools view -v snps -i 'QUAL>20' "$LOCAL_VCF" -Oz --threads {threads} -o "$LOCAL_OUT"
+        
+        # Index the filtered VCF
+        echo "Indexing filtered VCF..."
+        bcftools index "$LOCAL_OUT"
+        
+        # Copy results back to output directory
+        echo "Copying filtered VCF and index to output directory..."
+        mkdir -p $(dirname {output.vcf})
+        cp "$LOCAL_OUT" {output.vcf}
+        cp "${{LOCAL_OUT}}.csi" {output.csi}
+        
+        # Cleanup
+        rm -rf "$LOCAL_TMP"
+        
+        echo "Completed SNP filtering for chromosome {wildcards.chrom}"
         """
 
 rule process_pileup_with_chep:
