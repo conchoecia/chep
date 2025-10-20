@@ -202,6 +202,35 @@ def estimate_depth_stats_runtime(pileup_path, attempt=1):
     # Scale with retry attempts
     return safe_runtime * attempt
 
+def estimate_depth_stats_memory(pileup_path, attempt=1):
+    """
+    Estimate memory needed for windowed depth stats calculation based on pileup.gz size.
+    
+    The script loads all depth values into memory using defaultdict(list), which can be
+    memory-intensive for large chromosomes with high coverage.
+    
+    Memory usage depends on:
+    - Number of positions with reads (stored in memory)
+    - Depth values at each position (integers)
+    - Overhead from Python data structures (dict, list)
+    
+    Empirical observation: 2 GB is insufficient for some chromosomes.
+    Conservative estimate: 8 GB base + 4 GB per GB of compressed pileup size
+    This accounts for decompression expansion and data structure overhead.
+    """
+    import os
+    
+    # Get file size in GB
+    file_size_bytes = os.path.getsize(pileup_path)
+    file_size_gb = file_size_bytes / (1024**3)
+    
+    # Base memory: 8 GB minimum
+    # Additional: 4 GB per GB of compressed file (accounts for expansion and overhead)
+    base_memory_mb = 8000 + int(file_size_gb * 4000)
+    
+    # Scale with retry attempts (double memory on each retry)
+    return base_memory_mb * attempt
+
 # Create work directories
 os.makedirs(WORKDIR, exist_ok=True)
 os.makedirs(WORKDIR + "/batch_bams", exist_ok=True)
@@ -830,6 +859,8 @@ rule windowed_depth_stats:
     Calculate depth statistics in 50kbp windows from a pileup file.
     Output: scaf_name, start, stop, depth_mode, depth_mean, num_positions_with_reads
     Runtime scales with pileup.gz file size (15 min/GB with 2x safety margin, min 30 min)
+    Memory scales with file size (8GB base + 4GB per GB of compressed file)
+    Memory doubles on each retry attempt to handle OOM errors
     """
     input:
         pileup = WORKDIR + "/pileups/{chrom}.pileup.gz"
@@ -839,7 +870,7 @@ rule windowed_depth_stats:
         window_size = 50000
     threads: 1
     resources:
-        mem_mb = 2000,
+        mem_mb = lambda wildcards, input, attempt: estimate_depth_stats_memory(input.pileup, attempt),
         runtime = lambda wildcards, input, attempt: estimate_depth_stats_runtime(input.pileup, attempt)
     run:
         import gzip
